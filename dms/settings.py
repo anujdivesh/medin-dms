@@ -165,3 +165,9 @@ CORS_ALLOWED_ORIGINS = [
     ).split(",")
     if origin
 ]
+
+# Elasticsearch — used by the push_to_elasticsearch management command.
+# Which record fields are sent is configured per index in the admin
+# (api.ElasticsearchIndex), not here.
+ELASTICSEARCH_URL = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
+ELASTICSEARCH_API_KEY = os.getenv("ELASTICSEARCH_API_KEY", "")

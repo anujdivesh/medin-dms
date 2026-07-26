@@ -10,6 +10,8 @@ from .models import (
     Contact,
     CoordinateReferenceSystem,
     Country,
+    ElasticsearchFieldMap,
+    ElasticsearchIndex,
     FieldDefinition,
     Keyword,
     MetadataRecord,
@@ -75,6 +77,20 @@ class KeywordAdmin(admin.ModelAdmin):
 class SpatialRepresentationTypeAdmin(admin.ModelAdmin):
     list_display = ["id", "spatial_representation_type_value"]
     search_fields = ["spatial_representation_type_value"]
+
+
+class ElasticsearchFieldMapInline(admin.TabularInline):
+    model = ElasticsearchFieldMap
+    extra = 1
+    ordering = ["order", "id"]
+
+
+@admin.register(ElasticsearchIndex)
+class ElasticsearchIndexAdmin(admin.ModelAdmin):
+    list_display = ["name", "index_name", "only_published", "is_active"]
+    list_filter = ["is_active", "only_published"]
+    search_fields = ["name", "index_name"]
+    inlines = [ElasticsearchFieldMapInline]
 
 
 class FieldDefinitionInline(admin.TabularInline):

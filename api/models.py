@@ -1,3 +1,6 @@
+from datetime import date, datetime
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -349,6 +352,180 @@ class MetadataRecord(CoreMetadata, TimeStampedModel):
             raise ValidationError(
                 {"data": [f"{name}: {msg}" for name, msg in errors.items()]}
             )
+
+
+# Every field of a metadata record that may be sent to Elasticsearch, as
+# (path, label) pairs. Only core record fields are offered — values held in a
+# record's `data` (i.e. template-defined fields) are deliberately excluded.
+RECORD_SOURCE_CHOICES = [
+    ("id", "id"),
+    ("title", "title"),
+    ("abstract", "abstract"),
+    ("contact.firstname", "contact — firstname"),
+    ("contact.lastname", "contact — lastname"),
+    ("contact.email", "contact — email"),
+    ("contact.position", "contact — position"),
+    ("contact.organization", "contact — organization"),
+    ("language", "language"),
+    ("version", "version"),
+    ("country.short_name", "country — short_name"),
+    ("country.long_name", "country — long_name"),
+    ("west_bound_longitude", "west_bound_longitude"),
+    ("east_bound_longitude", "east_bound_longitude"),
+    ("south_bound_latitude", "south_bound_latitude"),
+    ("north_bound_latitude", "north_bound_latitude"),
+    ("crs_name", "crs_name"),
+    ("coordinate_reference_system.crs_value", "crs_value"),
+    ("coordinate_reference_system.crs_description", "crs_description"),
+    ("publisher.publisher_value", "publisher — publisher_value"),
+    ("publisher.website", "publisher — website"),
+    ("publisher.email", "publisher — email"),
+    ("topic.topic_value", "topic — topic_value"),
+    ("keywords.keyword_value", "keywords — keyword_value (list)"),
+    ("access_constraints", "access_constraints"),
+    ("license", "license"),
+    ("temporal_coverage_from", "temporal_coverage_from"),
+    ("temporal_coverage_to", "temporal_coverage_to"),
+    ("metadata_standard_name", "metadata_standard_name"),
+    ("metadata_standard_version", "metadata_standard_version"),
+    ("metadata_standard_language", "metadata_standard_language"),
+    ("update_frequency", "update_frequency"),
+    ("lineage", "lineage"),
+    (
+        "spatial_representation_type.spatial_representation_type_value",
+        "spatial_representation_type_value",
+    ),
+    ("status", "status"),
+    ("created_at", "created_at"),
+    ("updated_at", "updated_at"),
+]
+
+
+class ElasticsearchIndex(TimeStampedModel):
+    """An Elasticsearch index and the whitelist of record fields to send to it.
+
+    A record is only ever pushed with the fields listed in `fields` — nothing
+    else leaves the database. Only core record fields can be listed; values a
+    record holds for its template's fields (`data`) are never sent.
+    """
+
+    name = models.CharField(max_length=255, unique=True, help_text="Internal label")
+    index_name = models.CharField(
+        max_length=255, help_text="Elasticsearch index to write into, e.g. dms-records"
+    )
+    only_published = models.BooleanField(
+        default=True, help_text="Send published records only"
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "Elasticsearch index"
+        verbose_name_plural = "Elasticsearch indexes"
+
+    def __str__(self):
+        return f"{self.name} -> {self.index_name}"
+
+    def records(self):
+        """The records this index covers."""
+        qs = MetadataRecord.objects.all()
+        if self.only_published:
+            qs = qs.filter(status=MetadataRecord.Status.PUBLISHED)
+        return qs
+
+    def build_document(self, record):
+        """Return the dict to send to Elasticsearch for `record`."""
+        doc = {}
+        for field in self.fields.all():
+            if not field.is_enabled:
+                continue
+            doc[field.target_key] = resolve_source(record, field.source)
+        return doc
+
+    def build_mapping(self):
+        """Return an Elasticsearch mapping body for the enabled fields."""
+        properties = {
+            f.target_key: {"type": f.es_type}
+            for f in self.fields.all()
+            if f.is_enabled
+        }
+        return {"mappings": {"properties": properties}}
+
+
+class ElasticsearchFieldMap(models.Model):
+    """One field of a record to include in its Elasticsearch document."""
+
+    class ESType(models.TextChoices):
+        TEXT = "text", "text"
+        KEYWORD = "keyword", "keyword"
+        INTEGER = "integer", "integer"
+        FLOAT = "float", "float"
+        BOOLEAN = "boolean", "boolean"
+        DATE = "date", "date"
+        GEO_SHAPE = "geo_shape", "geo_shape"
+
+    index = models.ForeignKey(
+        ElasticsearchIndex, related_name="fields", on_delete=models.CASCADE
+    )
+    source = models.CharField(
+        max_length=200,
+        choices=RECORD_SOURCE_CHOICES,
+        help_text="Field of the metadata record to send",
+    )
+    target = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Key in the Elasticsearch document; defaults to the source path "
+        "with dots replaced by underscores",
+    )
+    es_type = models.CharField(
+        max_length=20, choices=ESType.choices, default=ESType.TEXT
+    )
+    is_enabled = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["index", "order", "id"]
+        unique_together = ("index", "source")
+        verbose_name = "Elasticsearch field"
+        verbose_name_plural = "Elasticsearch fields"
+
+    def __str__(self):
+        return f"{self.source} -> {self.target_key}"
+
+    @property
+    def target_key(self):
+        return self.target or self.source.replace(".", "_")
+
+
+def resolve_source(record, path):
+    """Resolve a `source` path against a record into a JSON-safe value.
+
+    Handles plain columns and computed properties (`title`, `crs_name`), one
+    hop through a related lookup (`country.long_name`) and many-to-many hops
+    (`keywords.keyword_value`, which returns a list).
+    """
+    value = record
+    for part in path.split("."):
+        if value is None:
+            return None
+        if hasattr(value, "all"):  # related manager: fan out over the rows
+            value = [getattr(v, part, None) for v in value.all()]
+        else:
+            value = getattr(value, part, None)
+    return _jsonable(value)
+
+
+def _jsonable(value):
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, models.Model):
+        return str(value)
+    return value
 
 
 def validate_record_data(template, data):
