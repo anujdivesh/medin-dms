@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": [
+    "vite.config.js",
+    "vite.config.ts",
+    "tailwind.config.js",
+    "tailwind.config.ts",
+    "eslint.config.js",
+    "eslint.config.ts"
+  ]
+} 

@@ -1,0 +1,144 @@
+## Validating the configuration
+
+pygeoapi config validate -c pygeoapi-generate-config/pygeoapi-config.yml
+Elasticsearch:
+http://localhost:9200
+
+PyGeoAPI:
+http://localhost:5000
+
+Frontend (React):
+http://localhost:3000
+
+Backend (FastAPI):
+http://localhost:8000
+
+Kibana (if included):
+http://localhost:5601
+
+
+access db ; docker-compose exec dms-database psql -U dms_user -d dms
+or
+psql -h localhost -p 5433 -U dms_user -d dms
+
+copy   file;  docker cp C:\Code\dms\database\dump-dms.sql dms-database:/docker-entrypoint-initdb.d/dump-dms.sql
+docker cp /home/divesha/kunal/dms/dms/dump-dms.sql dms-database:/docker-entrypoint-initdb.d/dump-dms.sql
+Load data ; docker-compose exec -T database psql -U dms_user -d dms -f /docker-entrypoint-initdb.d/dump-dms.sql
+
+
+Drop tables; docker-compose exec -T database psql -U dms_user -d dms -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+
+
+docker volume rm dms_postgres_data
+docker compose down
+docker compose up --build -d
+
+docker compose down -v   # remove containers + volumes
+
+docker exec -it dms-pygeoapi /bin/bash
+
+docker-compose stop pygeoapi
+docker-compose build pygeoapi
+docker-compose up pygeoapi
+
+tail pygeoapi logs
+docker exec -it dms-pygeoapi tail -f /app/logs/pygeoapi.log
+
+
+
+###temp add my git to OPM DATA
+alias ll='ls -ltr'
+alias nginxf='cd /etc/nginx/conf.d'
+alias dmsf='cd /home/divesha/kunal/dms/dms'
+eval "$(ssh-agent -s)"
+ssh-add /home/divesha/kunal/.ssh/id_ed25519
+ssh-add
+ssh -i /home/divesha/kunal/.ssh/id_ed25519 -T git@github.com
+
+git pull
+
+
+sudo nginx -t; sudo nginx -s reload
+
+#pull the latest from the remote and blow away ALL local
+git fetch origin && git reset --hard origin/main && git clean -fd 
+
+
+
+# Rename local env to disable it
+mv .env.local .env.local.backup
+
+# Rename production env to be the active one
+mv .env.production .env.local
+
+# Run dev server
+npm run dev
+
+# When done testing, restore the files
+mv .env.local .env.production
+mv .env.local.backup .env.local
+
+
+# backup from db to local 
+docker exec -t dms-database pg_dump -U dms_user -d dms > dms_backup_24032026245pmsql
+------------
+
+
+==23/01/2026==
+commented out rquested data in 
+C:\Code\dms\frontend\src\components\RequestDataButton.jsx
+C:\Code\dms\frontend\src\components\Layout.jsx
+C:\Code\dms\frontend\src\components\QuickSearch.jsx
+
+commented out echo depth in 
+C:\Code\dms\frontend\src\components\EchoDepthFloating.jsx
+C:\Code\dms\frontend\src\components\Layout.jsx
+
+
+
+
+## dropping table and recreating
+#connect to postgres container
+sudo docker exec -it dms-database psql -U dms_user -d postgres
+
+-- Force disconnect all sessions on the 'dms' database
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname = 'dms'
+  AND pid <> pg_backend_pid();
+
+#DROP
+DROP DATABASE IF EXISTS dms;
+
+#CREATE
+CREATE DATABASE dms OWNER dms_user;
+#Restoring
+sudo docker exec -i dms-database psql -U dms_user -d dms < local_dump-dms-202602181130.sql 
+
+
+************IN THREDDS************
+sudo cd /data/dms
+sudo eval "$(ssh-agent -s)"
+sudo ssh-add /root/.ssh/id_ed25519
+sudo ssh -T git@github.com
+
+===local commands===
+
+cd C:\Code\dms\elasticsearch; docker-compose -f docker-compose-local.yml up
+
+wsl -d Ubuntu
+cd /mnt/c/Code/dms/pygeoapi; source .venv/bin/activate; python main.py
+
+cd C:\Code\dms\frontend;npm run dev
+vite.config.js & C:\Code\dms
+frontend\src\configpiEndpoints.js
+
+wsl -d Ubuntu
+cd /mnt/c/Code/dms/backend; source .venv/bin/activate; python main.py
+===\\local commands===
+
+
+
+docker image prune -a
+docker container prune
+docker builder prune

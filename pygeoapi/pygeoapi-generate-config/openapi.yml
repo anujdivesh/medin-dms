@@ -1,0 +1,7 @@
+# Minimal OpenAPI YAML for pygeoapi
+openapi: 3.0.2
+info:
+  title: pygeoapi
+  version: 1.0.0
+paths: {}
+

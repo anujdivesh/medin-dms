@@ -1,0 +1,191 @@
+##############################################################################################################################
+#                   1. Database must be healthy before Elasticsearch starts.                                                 #
+#                   2. Elasticsearch must be healthy before PyGeoAPI starts.                                                 #                        
+#                   3. PyGeoAPI must be healthy before Frontend starts.                                                      #
+#                   4. AI (Ollama) must be healthy before Backend starts.                                                    #
+#                   5. Frontend must be healthy before Backend starts.                                                       #
+##############################################################################################################################
+###LOCAL###
+###  docker-compose -f docker-compose-local.yml up -d 
+##
+version: '3.9'
+
+services:
+  # 1. AI Service (Ollama)
+  ollama:
+    build:
+      context: ./docker/ollama
+      dockerfile: Dockerfile
+    container_name: dms-ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_MODEL=llama3.2:1b-instruct
+      - OLLAMA_ORIGINS=*
+      - OLLAMA_HOST=0.0.0.0:11434
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - dms-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:11434/api/tags || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+
+  # 2. Database (PostgreSQL + PostGIS)
+  database:
+    build:
+      context: ./database
+      dockerfile: Dockerfile
+    container_name: dms-database
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-dms_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-dms_password}
+      - POSTGRES_DB=${POSTGRES_DB:-dms}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - dms-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dms_user} -d ${POSTGRES_DB:-dms}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 3. Elasticsearch (after Database)
+  elasticsearch:
+    build:
+      context: ./elasticsearch
+      dockerfile: Dockerfile
+    container_name: dms-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - xpack.security.enabled=true
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - http.cors.enabled=true
+      - http.cors.allow-origin=http://localhost:3000
+      - http.cors.allow-credentials=true
+      - http.cors.allow-methods=OPTIONS,HEAD,GET,POST,PUT,DELETE
+      - http.cors.allow-headers=X-Requested-With,Content-Type,Authorization
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - dms-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -u elastic:${ELASTIC_PASSWORD} -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      database:
+        condition: service_healthy
+
+  # 4. PyGeoAPI (after Elasticsearch)
+  pygeoapi:
+    build:
+      context: ./pygeoapi
+      dockerfile: Dockerfile
+    container_name: dms-pygeoapi
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - PYGEOAPI_CONFIG=/app/pygeoapi-generate-config/pygeoapi-config.yml
+      - PYGEOAPI_OPENAPI=/app/pygeoapi-generate-config/openapi.yml
+      - ALLOWED_HOSTS=pygeoapi,pygeoapi:5000,localhost,127.0.0.1
+      - CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+      - CORS_ALLOW_CREDENTIALS=true
+      - CORS_ALLOW_METHODS=GET,POST,OPTIONS
+      - CORS_ALLOW_HEADERS=Content-Type,Authorization
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - dms-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/ || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  # 5. Frontend (after PyGeoAPI)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dms-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      pygeoapi:
+        condition: service_healthy
+    networks:
+      - dms-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  # 6. Backend (after Frontend and AI)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dms-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_SERVER=database
+      - POSTGRES_USER=${POSTGRES_USER:-dms_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-dms_password}
+      - POSTGRES_DB=${POSTGRES_DB:-dms}
+      - POSTGRES_PORT=5432
+      - ES_URL=http://elasticsearch:9200
+      - FRONTEND_URL=http://frontend:80
+      - PYGEOAPI_URL=http://pygeoapi:5000
+      - OLLAMA_URL=http://ollama:11434
+      - PORT=8000
+      - HOST=0.0.0.0
+      - CORS_ORIGINS=*
+    depends_on:
+      frontend:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    networks:
+      - dms-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./backend/logs:/app/logs
+      - ./backend/downloads:/app/downloads
+    env_file:
+      - ./backend/.env
+
+networks:
+  dms-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  elasticsearch_data:
+    driver: local
+  ollama_data:
+    driver: local

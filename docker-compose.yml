@@ -1,0 +1,225 @@
+##############################################################################################################################
+#                   1. Database must be healthy before Elasticsearch starts.                                                 #
+#                   2. Elasticsearch must be healthy before PyGeoAPI starts.                                                 #                        
+#                   3. PyGeoAPI must be healthy before Frontend starts.                                                      #
+#                   4. AI (Ollama) must be healthy before Backend starts.                                                    #
+#                   5. Frontend must be healthy before Backend starts.                                                       #
+##############################################################################################################################
+version: '3.9'
+
+services:
+  # # 1. AI Service (Ollama)
+  # ollama:
+  #   build:
+  #     context: ./docker/ollama
+  #     dockerfile: Dockerfile
+  #   container_name: dms-ollama
+  #   ports:
+  #     - "11434:11434"
+  #   environment:
+  #     - OLLAMA_MODEL=llama3.2:1b-instruct
+  #     - OLLAMA_ORIGINS=https://opmthredds.gem.spc.int
+  #     - OLLAMA_HOST=0.0.0.0:11434
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   restart: unless-stopped
+  #   networks:
+  #     - dms-network
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "curl -f http://localhost:11434/api/tags || exit 1"]
+  #     interval: 20s
+  #     timeout: 10s
+  #     retries: 5
+
+  # 2. Database (PostgreSQL + PostGIS)
+  database:
+    build:
+      context: ./database
+      dockerfile: Dockerfile
+    container_name: dms-database
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-dms_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-dms_password}
+      - POSTGRES_DB=${POSTGRES_DB:-dms}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - dms-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dms_user} -d ${POSTGRES_DB:-dms}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 3. Elasticsearch (after Database)
+  elasticsearch:
+    build:
+      context: ./elasticsearch
+      dockerfile: Dockerfile
+    container_name: dms-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - xpack.security.enabled=true
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - http.cors.enabled=true
+      # - http.cors.allow-origin=https://opmthredds.gem.spc.int
+      - http.cors.allow-origin=https://oceandata.spc.int
+      - http.cors.allow-credentials=true
+      - http.cors.allow-methods=OPTIONS,HEAD,GET,POST,PUT,DELETE
+      - http.cors.allow-headers=X-Requested-With,Content-Type,Authorization
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - dms-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -u elastic:${ELASTIC_PASSWORD} -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      database:
+        condition: service_healthy
+
+  # 4. PyGeoAPI (after Elasticsearch)
+  pygeoapi:
+    build:
+      context: ./pygeoapi
+      dockerfile: Dockerfile
+    container_name: dms-pygeoapi
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - PYGEOAPI_CONFIG=/app/pygeoapi-generate-config/pygeoapi-config.yml
+      - PYGEOAPI_OPENAPI=/app/pygeoapi-generate-config/openapi.yml
+      - ALLOWED_HOSTS=pygeoapi,pygeoapi:5000,localhost,127.0.0.1,oceandata.spc.int,ocean-pygeoapi.spc.int
+      # - CORS_ORIGINS=https://opmthredds.gem.spc.int
+      - CORS_ORIGINS=https://oceandata.spc.int
+      - CORS_ALLOW_CREDENTIALS=true
+      - CORS_ALLOW_METHODS=GET,POST,OPTIONS
+      - CORS_ALLOW_HEADERS=Content-Type,Authorization
+    volumes:
+      # Bind-mounted (rather than baked in at build time, like the rest of
+      # this image) so the backend's ElasticsearchIndex-driven regeneration
+      # (api.pygeoapi_sync) actually lands here instead of only in the
+      # image - see the backend service below. gunicorn is started
+      # with --reload-extra-file "${PYGEOAPI_CONFIG}" (see Dockerfile), so
+      # editing an index in the admin reloads pygeoapi's workers on its
+      # own - no manual restart or docker.sock access needed.
+      # PYGEOAPI_AUTO_RESTART stays off in the backend either way, since
+      # its WSL/bash-based restart mechanism has no equivalent in Docker.
+      - ./pygeoapi/pygeoapi-generate-config:/app/pygeoapi-generate-config
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - dms-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/ || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  # 5. Frontend (after PyGeoAPI)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_BASE_PATH: "/dms/"
+        VITE_ES_USERNAME: "${VITE_ES_USERNAME}"
+        VITE_ES_PASSWORD: "${VITE_ES_PASSWORD}"
+    container_name: dms-frontend
+    restart: unless-stopped
+    ports:
+      - "9005:80"
+    depends_on:
+      pygeoapi:
+        condition: service_healthy
+    networks:
+      - dms-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  # 6. Backend (after Frontend and AI)
+  # Django - replaced the old FastAPI backend (formerly ./backend, previously
+  # developed in parallel as ./new_backend). Targets its own "new_dms"
+  # database (see database/init_new_dms.sql), not this compose file's
+  # POSTGRES_DB, since the old FastAPI backend's schema is unrelated.
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dms-backend
+    restart: unless-stopped
+    ports:
+      - "9006:8000"
+    environment:
+      - DJANGO_DEBUG=False
+      - DJANGO_ALLOWED_HOSTS=opmthredds.gem.spc.int,oceandata.spc.int,ocean-data-backend.spc.int,localhost,127.0.0.1
+      - DJANGO_FORCE_SCRIPT_NAME=/dms
+      - DJANGO_STATIC_URL=/dms/static/
+      - DJANGO_MEDIA_URL=/dms/media/
+      - DB_NAME=new_dms
+      - DB_USER=${POSTGRES_USER:-dms_user}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-dms_password}
+      - DB_HOST=database
+      - DB_PORT=5432
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=${ELASTIC_PASSWORD}
+      - CORS_ALLOWED_ORIGINS=https://oceandata.spc.int
+      - FRONTEND_URL=https://oceandata.spc.int
+      # pygeoapi runs in its own container/filesystem here - this must match
+      # the path the pygeoapi-generate-config volume is mounted at below.
+      - PYGEOAPI_DIR=/pygeoapi
+      # Off by default in prod: restart_pygeoapi()'s local-dev mechanism
+      # (bash script + venv) doesn't apply across containers. Regenerating
+      # pygeoapi-config.yml still happens (shared volume below) - only the
+      # restart is skipped, so a manual `docker restart dms-pygeoapi` (or
+      # your next redeploy) is what actually picks up a new collection.
+      - PYGEOAPI_AUTO_RESTART=False
+    depends_on:
+      database:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    networks:
+      - dms-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/health/ || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./backend/media:/app/media
+      - ./pygeoapi/pygeoapi-generate-config:/pygeoapi/pygeoapi-generate-config
+    env_file:
+      - ./backend/.env
+
+
+networks:
+  dms-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    external: true
+    name: dms-main_postgres_data
+  elasticsearch_data:
+    driver: local
+  ollama_data:
+    driver: local
