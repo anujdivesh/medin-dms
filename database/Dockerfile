@@ -14,7 +14,7 @@ COPY init_new_dms.sql /docker-entrypoint-initdb.d/01_init_new_dms.sql
 # One-time initial data for new_dms (see the comment in init_new_dms.sql) -
 # runs against the empty database 01_ just created. Only fires on a brand
 # new /var/lib/postgresql/data volume, same as the scripts above.
-COPY backups/new_dms_seed_2026-08-12.sql /docker-entrypoint-initdb.d/02_seed_new_dms.sql
+COPY backup/new_dms_seed_2026-08-12.sql /docker-entrypoint-initdb.d/02_seed_new_dms.sql
 
 # Expose PostgreSQL port
 EXPOSE 5432

@@ -51,15 +51,11 @@ def get_es_client():
 
 
 def _doc_id(record):
-    """Records imported from the legacy backend (Phase 4's ETL) carry their
-    original legacy numeric id in `legacy_id` - reusing it means a migrated
-    record's document *replaces* the one legacy already wrote for it,
-    instead of duplicating under Django's own (unrelated) pk. Records
-    created fresh in the new backend have no `legacy_id`, so they fall back
-    to `pk`.
+    """Django's pk, used as both the Elasticsearch document id and the
+    pygeoapi item id - kept equal to the pk everywhere so an id in the admin
+    always matches the same id in pygeoapi/the frontend.
     """
-    return str(record.legacy_id if record.legacy_id is not None else record.pk)
-
+    return str(record.pk)
 
 def _index_for(record):
     """The ElasticsearchIndex configured for `record`'s metadata_type, if any."""
