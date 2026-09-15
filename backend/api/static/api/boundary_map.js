@@ -54,17 +54,57 @@
 
     loadCss("https://unpkg.com/leaflet@1.3.1/dist/leaflet.css");
     loadCss("https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css");
+    loadCss("https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css");
     loadScript("https://unpkg.com/leaflet@1.3.1/dist/leaflet.js", function () {
-      loadScript("https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js", initMap);
+      loadScript("https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js", function () {
+        loadScript("https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js", function () {
+          loadScript("https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.20/leaflet-maplibre-gl.js", initMap);
+        });
+      });
     });
 
     var map, drawnItems, rectangleDrawer, markerDrawer;
 
     function initMap() {
       map = L.map("boundary-map").setView([-15, 175], 4);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap contributors",
-      }).addTo(map);
+      // OpenFreeMap styles are vector (MapLibre), not plain raster XYZ tiles -
+      // plain tile.openstreetmap.org kept hitting usage-policy blocks (403
+      // "Access blocked") the more this page's map got reloaded during dev.
+      // L.maplibreGL (the maplibre-gl-leaflet bridge) adds each as a Leaflet
+      // layer so Leaflet.Draw's rectangle/marker tools above still work
+      // unchanged, and so they sit in the same layer switcher as the
+      // plain-raster satellite option.
+      var baseLayers = {
+        // Matches the tile source pygeoapi's own item/list pages use
+        // (pygeoapi-generate-config's server.map). Same OSM usage-policy
+        // blocking risk under heavy reload applies here too - the OpenFreeMap
+        // options above stay available as a fallback if this gets blocked.
+        OpenStreetMap: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap contributors</a>',
+          maxZoom: 19,
+        }),
+        "OpenFreeMap Liberty": L.maplibreGL({ style: "https://tiles.openfreemap.org/styles/liberty" }),
+        "OpenFreeMap Bright": L.maplibreGL({ style: "https://tiles.openfreemap.org/styles/bright" }),
+        "OpenFreeMap Positron": L.maplibreGL({ style: "https://tiles.openfreemap.org/styles/positron" }),
+        // Plain World_Imagery has no place names/roads/borders on it - paired
+        // with Esri's reference overlay (place labels + boundaries) in a
+        // layerGroup so "Satellite" is one selectable, fully-labelled option.
+        "Satellite (Esri)": L.layerGroup([
+          L.tileLayer(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            {
+              attribution: "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+              maxZoom: 19,
+            }
+          ),
+          L.tileLayer(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+            { maxZoom: 19 }
+          ),
+        ]),
+      };
+      baseLayers["OpenFreeMap Bright"].addTo(map);
+      L.control.layers(baseLayers).addTo(map);
 
       drawnItems = new L.FeatureGroup();
       map.addLayer(drawnItems);

@@ -235,9 +235,15 @@ ELASTICSEARCH_API_KEY = os.getenv("ELASTICSEARCH_API_KEY", "")
 ELASTICSEARCH_USERNAME = os.getenv("ELASTICSEARCH_USERNAME", "elastic")
 ELASTICSEARCH_PASSWORD = os.getenv("ELASTICSEARCH_PASSWORD", "T2NlYW5wb3J0YWwyMDE3")
 
-# Used to build absolute links (e.g. acquisition report downloads) in
-# Elasticsearch documents - mirrors the legacy backend's FRONTEND_URL.
+# Kept for parity with the legacy backend's own FRONTEND_URL; not otherwise
+# read anywhere in this codebase.
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+# Used to build an absolute acquisition-report download link (see
+# MetadataRecord.acquisition_report_url in api/models.py) - the stored
+# `acquisition_report_link` is a bare legacy path; the actual files live
+# under MEDIA_ROOT/acquisition_reports/, served at BACKEND_URL/media/...
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 # pygeoapi collection sync (api.pygeoapi_sync) - regenerates pygeoapi's
 # config whenever an ElasticsearchIndex is saved/deleted in the admin, so
