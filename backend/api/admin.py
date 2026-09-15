@@ -1,3 +1,4 @@
+from django import forms
 from django.contrib import admin, messages
 
 from .elasticsearch_sync import resync_records_for
@@ -21,6 +22,7 @@ from .models import (
     MetadataType,
     Project,
     Publisher,
+    RECORD_SOURCE_CHOICES,
     SpatialRepresentationType,
     Topic,
 )
@@ -110,8 +112,44 @@ class MetadataTypeAdmin(admin.ModelAdmin):
     search_fields = ["metadata_type_value"]
 
 
+def _source_choices():
+    """RECORD_SOURCE_CHOICES plus one `data.<name>` choice per field name
+    currently defined on any template - so a field added to a template shows
+    up here immediately, with no code change needed. Different templates can
+    reuse the same field name with a different label; the first one wins."""
+    labels_by_name = {}
+    for name, label in FieldDefinition.objects.values_list("name", "label"):
+        labels_by_name.setdefault(name, label)
+    template_choices = [
+        (f"data.{name}", f"data — {label or name}")
+        for name, label in sorted(labels_by_name.items())
+    ]
+    return list(RECORD_SOURCE_CHOICES) + template_choices
+
+
+class ElasticsearchFieldMapForm(forms.ModelForm):
+    class Meta:
+        model = ElasticsearchFieldMap
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        choices = _source_choices()
+        current = self.instance.source if self.instance.pk else None
+        if current and current not in dict(choices):
+            # The template field (or template) behind this saved mapping was
+            # since renamed/removed - keep it selectable so editing an
+            # unrelated row on this index doesn't fail validation on it.
+            choices = [(current, f"{current} (no longer defined)")] + choices
+        self.fields["source"] = forms.ChoiceField(
+            choices=choices,
+            help_text=self.fields["source"].help_text,
+        )
+
+
 class ElasticsearchFieldMapInline(admin.TabularInline):
     model = ElasticsearchFieldMap
+    form = ElasticsearchFieldMapForm
     extra = 1
     ordering = ["order", "id"]
 
@@ -155,6 +193,7 @@ class MetadataRecordAdmin(admin.ModelAdmin):
         "topic",
         "spatial_representation_type",
         "data_type",
+        "project",
         "metadata_type",
     ]
     filter_horizontal = ["keywords"]

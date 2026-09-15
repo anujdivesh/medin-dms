@@ -15,8 +15,6 @@ from django.db.models import Q
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from .models import Project
-
 
 class LegacyListEnvelopeMixin:
     legacy_data_key = None  # e.g. "contacts" - set per ViewSet
@@ -61,8 +59,7 @@ def legacy_metadata_dict(record):
     this only needs to show what's in new_dms, not replicate legacy's
     approval-queue business rules.
     """
-    project_id = record.data.get("project") if isinstance(record.data, dict) else None
-    project = Project.objects.filter(pk=project_id).first() if project_id else None
+    project = record.project if record.project_id else None
 
     sr_type = record.spatial_representation_type if record.spatial_representation_type_id else None
     crs = record.coordinate_reference_system if record.coordinate_reference_system_id else None
@@ -81,7 +78,7 @@ def legacy_metadata_dict(record):
         "temporal_coverage_to": record.temporal_coverage_to,
         "language": record.language,
         "version": record.version,
-        "project_id": project_id,
+        "project_id": record.project_id,
         "project_name": project.project_name if project else None,
         "project_code": project.project_code if project else None,
         "west_bounding_longitude": record.west_bound_longitude,

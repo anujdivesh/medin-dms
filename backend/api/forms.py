@@ -4,7 +4,7 @@ from django import forms
 from django.core.files.storage import default_storage
 from django.db.models import Model
 
-from .models import FieldType, MetadataRecord, Project
+from .models import FieldType, MetadataRecord
 
 # Prefix that marks a form field as a template ("data") field.
 DYNAMIC_PREFIX = "tpl__"
@@ -30,6 +30,7 @@ CORE_FIELDS = [
     "topic",
     "keywords",
     "data_type",
+    "project",
     "access_constraints",
     "license",
     "temporal_coverage_from",
@@ -46,10 +47,12 @@ CORE_FIELDS = [
     "history",
     "fundings",
     "references",
-    "acquisition_report_link",
+    "acquisition_report_file",
     "project_report_link",
     "factsheet",
     "attribute",
+    "additional_information",
+    "additional_information_file",
     "file",
     "file_description",
 ]
@@ -96,8 +99,6 @@ def build_form_field(field_def, value):
     if ftype == FieldType.MULTISELECT:
         choices = [(c, c) for c in field_def.choices]
         return forms.MultipleChoiceField(choices=choices, **common)
-    if ftype == FieldType.PROJECT:
-        return forms.ModelChoiceField(queryset=Project.objects.all(), **common)
     if ftype in (FieldType.FILE, FieldType.IMAGE):
         # Files aren't stored in `data` directly; the current value is shown as
         # a hint and only replaced when a new file is uploaded.
@@ -119,7 +120,6 @@ def _to_jsonable(value):
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     if isinstance(value, Model):
-        # Lookup fields (e.g. project) are stored in `data` as their id.
         return value.pk
     return value
 

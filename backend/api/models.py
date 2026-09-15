@@ -24,7 +24,6 @@ class FieldType(models.TextChoices):
     MULTISELECT = "multiselect", "Select (many choices)"
     FILE = "file", "File upload"
     IMAGE = "image", "Image upload"
-    PROJECT = "project", "Project (lookup)"
 
 
 class TimeStampedModel(models.Model):
@@ -190,12 +189,7 @@ class Keyword(LegacyImportedModel, LegacyLookupTimestamps):
 
 
 class Project(LegacyImportedModel, LegacyLookupTimestamps):
-    """A project a record can be attributed to.
-
-    Not core metadata — templates opt in by declaring a field of type
-    `FieldType.PROJECT`, whose value is stored in the record's `data` as the
-    project's id.
-    """
+    """A project a record can be attributed to."""
 
     project_name = models.CharField(max_length=255)
     project_code = models.CharField(max_length=50, unique=True)
@@ -324,6 +318,14 @@ class CoreMetadata(models.Model):
         null=True,
         blank=True,
     )
+    project = models.ForeignKey(
+        Project,
+        related_name="%(class)ss",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        help_text="Project this record is attributed to, if any",
+    )
     metadata_type = models.ForeignKey(
         MetadataType,
         related_name="%(class)ss",
@@ -340,10 +342,20 @@ class CoreMetadata(models.Model):
     history = models.TextField(blank=True)
     fundings = models.TextField(blank=True)
     references = models.TextField(blank=True)
-    acquisition_report_link = models.TextField(blank=True)
+    acquisition_report_file = models.FileField(
+        upload_to="acquisition_reports/", null=True, blank=True
+    )
     project_report_link = models.TextField(blank=True)
     factsheet = models.TextField(blank=True)
     attribute = models.TextField(blank=True)
+    additional_information = models.TextField(
+        blank=True, help_text="A supplementary document/report link for this record"
+    )
+    additional_information_file = models.FileField(
+        upload_to="additional_information/", null=True, blank=True,
+        help_text="Upload instead of (or in addition to) a link above - the "
+        "upload wins if both are set",
+    )
 
     # --- Uploaded file ---
     file = models.FileField(upload_to="metadata_files/", null=True, blank=True)
@@ -391,6 +403,55 @@ class CoreMetadata(models.Model):
     @property
     def crs_name(self):
         return self.country.crs_name
+
+    @property
+    def access_constraints_label(self):
+        """The human-readable choice label ("Private"/"Open") - the raw
+        `access_constraints` value is the lowercase DB choice, but external
+        consumers (e.g. the legacy metadata index) expect the display form."""
+        return self.get_access_constraints_display()
+
+    @property
+    def acquisition_report_url(self):
+        """Absolute download link for the uploaded `acquisition_report_file` -
+        its own `.url` is MEDIA_URL-relative, not reachable as-is from an
+        Elasticsearch/pygeoapi consumer."""
+        if not self.acquisition_report_file:
+            return ""
+        return f"{settings.BACKEND_URL}{self.acquisition_report_file.url}"
+
+    @property
+    def additional_information_value(self):
+        """Whichever of the two `additional_information*` fields is set - an
+        uploaded file wins over a typed link if somehow both are."""
+        if self.additional_information_file:
+            return f"{settings.BACKEND_URL}{self.additional_information_file.url}"
+        return self.additional_information
+
+    @property
+    def file_url(self):
+        """Absolute link for the uploaded `file` - its own `.url` is
+        MEDIA_URL-relative (e.g. "/media/metadata_files/x.pdf"), not
+        reachable as-is from an Elasticsearch/pygeoapi consumer."""
+        if not self.file:
+            return ""
+        return f"{settings.BACKEND_URL}{self.file.url}"
+
+    @property
+    def link_to_data_url(self):
+        """`link_to_data` as typed in is often an internal file-share path
+        (e.g. "S:/GEM/FJ_NAB/...") rather than a real URL - only surface it
+        to pygeoapi/Elasticsearch when it actually looks like one."""
+        value = self.link_to_data.strip()
+        return value if value.lower().startswith(("http://", "https://")) else ""
+
+    @property
+    def project_report_url(self):
+        """Same rule as `link_to_data_url` - project_report_link sometimes
+        holds a plain description (e.g. "World Bank Document") instead of an
+        actual link."""
+        value = self.project_report_link.strip()
+        return value if value.lower().startswith(("http://", "https://")) else ""
 
     @property
     def geojson_geometry(self):
@@ -543,11 +604,14 @@ class MetadataRecord(CoreMetadata, TimeStampedModel, LegacyImportedModel):
             )
 
 
-# Every field of a metadata record that may be sent to Elasticsearch, as
-# (path, label) pairs. Only core record fields are offered — values held in a
-# record's `data` (i.e. template-defined fields) are deliberately excluded.
+# The core (always-present) record fields that may be sent to Elasticsearch,
+# as (path, label) pairs. A template's own fields aren't listed here since
+# they vary per template - ElasticsearchFieldMapForm (admin.py) adds one
+# `data.<name>` choice per currently-defined FieldDefinition on top of this
+# list; resolve_source() below knows how to read either kind of path.
 RECORD_SOURCE_CHOICES = [
     ("id", "id"),
+    ("template.name", "template — name"),
     ("title", "title"),
     ("abstract", "abstract"),
     ("contact.firstname", "contact — firstname"),
@@ -572,7 +636,8 @@ RECORD_SOURCE_CHOICES = [
     ("publisher.email", "publisher — email"),
     ("topic.topic_value", "topic — topic_value"),
     ("keywords.keyword_value", "keywords — keyword_value (list)"),
-    ("access_constraints", "access_constraints"),
+    ("access_constraints", "access_constraints (raw DB value)"),
+    ("access_constraints_label", "access_constraints_label (display label)"),
     ("license", "license"),
     ("temporal_coverage_from", "temporal_coverage_from"),
     ("temporal_coverage_to", "temporal_coverage_to"),
@@ -581,6 +646,7 @@ RECORD_SOURCE_CHOICES = [
     ("metadata_standard_language", "metadata_standard_language"),
     ("update_frequency", "update_frequency"),
     ("lineage", "lineage"),
+    ("data_format", "data_format"),
     (
         "spatial_representation_type.spatial_representation_type_value",
         "spatial_representation_type_value",
@@ -589,15 +655,27 @@ RECORD_SOURCE_CHOICES = [
     ("created_at", "created_at"),
     ("updated_at", "updated_at"),
     ("comment", "comment"),
-    ("link_to_data", "link_to_data"),
-    ("acquisition_report_link", "acquisition_report_link"),
-    ("project_report_link", "project_report_link"),
+    ("link_to_data", "link_to_data (raw value, may not be a URL)"),
+    ("link_to_data_url", "link_to_data_url (blank unless it's a real URL)"),
+    ("acquisition_report_file", "acquisition_report_file (raw storage path)"),
+    ("acquisition_report_url", "acquisition_report_url (absolute download link)"),
+    ("additional_information", "additional_information (typed link/text)"),
+    ("additional_information_file", "additional_information_file (raw storage path)"),
+    ("additional_information_value", "additional_information_value (resolved: upload or text)"),
+    ("project_report_link", "project_report_link (raw value, may not be a URL)"),
+    ("project_report_url", "project_report_url (blank unless it's a real URL)"),
     ("factsheet", "factsheet"),
     ("fundings", "fundings"),
     ("references", "references"),
     ("acknowledgement", "acknowledgement"),
     ("history", "history"),
+    ("attribute", "attribute"),
+    ("file", "file (raw storage path)"),
+    ("file_url", "file_url (absolute download link)"),
+    ("file_description", "file_description"),
     ("data_type.data_type_value", "data_type — data_type_value"),
+    ("project.project_name", "project — project_name"),
+    ("project.project_code", "project — project_code"),
     ("metadata_type.metadata_type_value", "metadata_type — metadata_type_value"),
 ]
 
@@ -648,22 +726,40 @@ class ElasticsearchIndex(TimeStampedModel):
         field whitelist (`fields`) resolves to - deliberately simpler than
         the legacy backend's field-by-field capitalisation/renaming, since
         that's no longer something this project is trying to replicate
-        byte-for-byte (see the migration plan, Phase 9).
+        byte-for-byte (see the migration plan, Phase 9). A target containing
+        a dot (e.g. "contacts.Name") nests under the outer key instead of
+        becoming one flat "contacts.Name" property - pygeoapi's item HTML
+        template already renders a nested object as one grouped, labelled
+        block, so this is how a group of fields (e.g. one record's contact
+        details) gets shown together instead of as separate rows.
         """
         geometry = record.geojson_geometry
 
         properties = {}
         for field in self.fields.filter(is_enabled=True).order_by("order", "id"):
             value = resolve_source(record, field.source)
+            if isinstance(value, list) and all(isinstance(v, str) for v in value):
+                # A many-to-many fan-out (e.g. keywords) resolves to a list of
+                # plain strings - the reference metadata index this project
+                # matches sends those comma-joined, not as a JSON array.
+                value = ", ".join(value)
             if value not in (None, "", [], {}):
-                properties[field.target_key] = value
+                _set_nested(properties, field.target_key, value)
+
+        if "contacts" in properties:
+            # The reference index sends "contacts" as an array (one entry per
+            # contact) even though a record here only ever has one - keep the
+            # shape consistent with it rather than a bare object.
+            properties["contacts"] = [properties["contacts"]]
 
         # Only expose a direct data link for records marked open - mirrors
         # legacy's privacy-sensitive gating (private data's link_to_data
         # shouldn't be a publicly discoverable URL in the search index).
+        # link_to_data_url is blank when the raw value isn't actually a URL
+        # (e.g. an internal "S:/GEM/..." file-share path).
         links = []
-        if record.link_to_data and record.access_constraints == AccessConstraints.OPEN:
-            links.append({"href": record.link_to_data, "rel": "item"})
+        if record.link_to_data_url and record.access_constraints == AccessConstraints.OPEN:
+            links.append({"href": record.link_to_data_url, "rel": "item"})
 
         doc_id = str(record.legacy_id if record.legacy_id is not None else record.pk)
         return {
@@ -683,11 +779,10 @@ class ElasticsearchIndex(TimeStampedModel):
 
     def build_mapping(self):
         """Return an Elasticsearch mapping body for the enabled fields."""
-        properties = {
-            f.target_key: {"type": f.es_type}
-            for f in self.fields.all()
-            if f.is_enabled
-        }
+        properties = {}
+        for f in self.fields.all():
+            if f.is_enabled:
+                _set_nested_mapping(properties, f.target_key, {"type": f.es_type})
         return {"mappings": {"properties": properties}}
 
 
@@ -708,14 +803,17 @@ class ElasticsearchFieldMap(models.Model):
     )
     source = models.CharField(
         max_length=200,
-        choices=RECORD_SOURCE_CHOICES,
-        help_text="Field of the metadata record to send",
+        help_text="Field of the metadata record to send - a core field (see "
+        "RECORD_SOURCE_CHOICES) or data.<name> for one of the active "
+        "template's own fields. The admin form offers both as a dropdown.",
     )
     target = models.CharField(
         max_length=200,
         blank=True,
         help_text="Key in the Elasticsearch document; defaults to the source path "
-        "with dots replaced by underscores",
+        "with dots replaced by underscores. Give two fields the same dotted "
+        "prefix (e.g. contacts.Name and contacts.Email) to group them into "
+        "one nested object, shown as one labelled block instead of separate rows.",
     )
     es_type = models.CharField(
         max_length=20, choices=ESType.choices, default=ESType.TEXT
@@ -741,9 +839,15 @@ def resolve_source(record, path):
     """Resolve a `source` path against a record into a JSON-safe value.
 
     Handles plain columns and computed properties (`title`, `crs_name`), one
-    hop through a related lookup (`country.long_name`) and many-to-many hops
-    (`keywords.keyword_value`, which returns a list).
+    hop through a related lookup (`country.long_name`), many-to-many hops
+    (`keywords.keyword_value`, which returns a list), and `data.<name>` -
+    one of the active template's own fields, read straight out of the
+    record's `data` JSON so any field added to a template is indexable
+    without a code change.
     """
+    if path.startswith("data."):
+        return _jsonable((record.data or {}).get(path[len("data."):]))
+
     value = record
     for part in path.split("."):
         if value is None:
@@ -760,11 +864,33 @@ def _jsonable(value):
         return [_jsonable(v) for v in value]
     if isinstance(value, Decimal):
         return float(value)
+    if isinstance(value, models.fields.files.FieldFile):
+        return value.name or None
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     if isinstance(value, models.Model):
         return str(value)
     return value
+
+
+def _set_nested(container, dotted_key, value):
+    """Assign `value` into `container` at `dotted_key`, creating a nested
+    dict per "." - e.g. "contacts.Name" sets container["contacts"]["Name"]."""
+    *path, leaf = dotted_key.split(".")
+    for part in path:
+        container = container.setdefault(part, {})
+    container[leaf] = value
+
+
+def _set_nested_mapping(container, dotted_key, leaf_mapping):
+    """Like `_set_nested`, but for an Elasticsearch mapping body: each
+    intermediate level needs its own `{"type": "object", "properties": {}}`
+    node, not a plain dict."""
+    *path, leaf = dotted_key.split(".")
+    for part in path:
+        node = container.setdefault(part, {"type": "object", "properties": {}})
+        container = node["properties"]
+    container[leaf] = leaf_mapping
 
 
 def validate_record_data(template, data):
@@ -827,11 +953,4 @@ def _validate_value(field, value):
     elif ftype == FieldType.MULTISELECT:
         if not isinstance(value, list) or any(v not in field.choices for v in value):
             return f"Must be a list of: {', '.join(map(str, field.choices))}."
-    elif ftype == FieldType.PROJECT:
-        try:
-            pk = int(value)
-        except (TypeError, ValueError):
-            return "Expected the id of a project."
-        if not Project.objects.filter(pk=pk).exists():
-            return f"No project with id {pk}."
     return None

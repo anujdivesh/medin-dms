@@ -210,6 +210,7 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
         source="spatial_representation_type", read_only=True
     )
     data_type_detail = DataTypeSerializer(source="data_type", read_only=True)
+    project_detail = ProjectSerializer(source="project", read_only=True)
     metadata_type_detail = MetadataTypeSerializer(source="metadata_type", read_only=True)
 
     # Denormalised convenience fields, all sourced from the related country.
@@ -285,6 +286,8 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
             "spatial_representation_type_detail",
             "data_type",
             "data_type_detail",
+            "project",
+            "project_detail",
             "metadata_type",
             "metadata_type_detail",
             "comment",
@@ -293,10 +296,12 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
             "history",
             "fundings",
             "references",
-            "acquisition_report_link",
+            "acquisition_report_file",
             "project_report_link",
             "factsheet",
             "attribute",
+            "additional_information",
+            "additional_information_file",
             "file",
             "file_description",
             "data",
