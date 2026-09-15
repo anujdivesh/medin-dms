@@ -171,6 +171,7 @@ services:
       - DJANGO_FORCE_SCRIPT_NAME=/dms
       - DJANGO_STATIC_URL=/dms/static/
       - DJANGO_MEDIA_URL=/dms/media/
+      - BACKEND_URL=https://opmthredds.gem.spc.int
       - DB_NAME=new_dms
       - DB_USER=${POSTGRES_USER:-dms_user}
       - DB_PASSWORD=${POSTGRES_PASSWORD:-dms_password}

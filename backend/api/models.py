@@ -761,7 +761,8 @@ class ElasticsearchIndex(TimeStampedModel):
         if record.link_to_data_url and record.access_constraints == AccessConstraints.OPEN:
             links.append({"href": record.link_to_data_url, "rel": "item"})
 
-        doc_id = str(record.legacy_id if record.legacy_id is not None else record.pk)
+#        doc_id = str(record.legacy_id if record.legacy_id is not None else record.pk)
+        doc_id = str(record.pk)
         return {
             "id": doc_id,
             "conformsTo": ["http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/record-core"],
