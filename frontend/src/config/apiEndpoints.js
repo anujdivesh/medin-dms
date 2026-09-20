@@ -1,13 +1,6 @@
 // Centralized API endpoints configuration
 // This file contains all API endpoints used throughout the application
 
-// Comma-separated Elasticsearch indices to search across - one per active
-// MetadataType/ElasticsearchIndex in the backend (api/elasticsearch_sync.py).
-// "lidar" holds all real data today; "oceanography" is included for forward
-// compatibility even though it's currently empty. Update this list whenever
-// a new metadata type/index is added in the backend admin.
-const ES_INDICES = 'lidar,oceanography'
-
 export const API_ENDPOINTS = {
   // Data Request endpoints
   DATA_REQUESTS: {
@@ -18,22 +11,29 @@ export const API_ENDPOINTS = {
   },
 
   // Elasticsearch endpoints
+  // No index is named here - these hit ES's cluster-wide _search, so every
+  // active MetadataType/ElasticsearchIndex (api/elasticsearch_sync.py) is
+  // searched automatically as soon as it's created in the backend admin,
+  // with no frontend change needed. Safe because /dms/es proxies straight
+  // to a dedicated Elasticsearch container (see nginx.conf) with nothing
+  // else indexed on it.
   ELASTICSEARCH: {
     BASE: import.meta.env.VITE_ES_BASE || '/dms/es',
     USERNAME: import.meta.env.VITE_ES_USERNAME || 'elastic',
     PASSWORD: import.meta.env.VITE_ES_PASSWORD || 'T2NlYW5wb3J0YWwyMDE3',
-    METADATA_SEARCH: `/${ES_INDICES}/_search`,
-    METADATA_SEARCH_WITH_SIZE: (size = 1000) => `/${ES_INDICES}/_search?size=${size}`,
-    METADATA_SEARCH_PAGINATED: (from = 0, size = 10) => `/${ES_INDICES}/_search?from=${from}&size=${size}`,
+    METADATA_SEARCH: `/_search`,
+    METADATA_SEARCH_WITH_SIZE: (size = 1000) => `/_search?size=${size}`,
+    METADATA_SEARCH_PAGINATED: (from = 0, size = 10) => `/_search?from=${from}&size=${size}`,
     // Filter aggregations for getting distinct values
-    COUNTRIES_AGGREGATION: `/${ES_INDICES}/_search`,
+    COUNTRIES_AGGREGATION: `/_search`,
   },
 
   // PyGeoAPI endpoints
-  // One collection per MetadataType (see the migration plan, Phase 9) -
-  // "lidar" is the default since that's the only type with real data
-  // today; pass a record's own metadata_type_value (lowercased) once
-  // the frontend has it available.
+  // One collection per MetadataType (see the migration plan, Phase 9),
+  // named identically to its ElasticsearchIndex.index_name - callers should
+  // pass a record's own metadataType (from its ES hit's _index, see
+  // elasticsearchService.transformElasticsearchResponse) rather than rely
+  // on DEFAULT_COLLECTION, which only exists as a last-resort fallback.
   PYGEOAPI: {
     BASE: import.meta.env.VITE_PYGEOAPI_BASE || '/dms/pygeoapi',
     COLLECTIONS: '/collections',

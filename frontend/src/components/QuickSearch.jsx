@@ -40,7 +40,7 @@ function QuickSearch({ open, onOpenChange }) {
   // Determine suggestions based on mode
   const suggestions = useMemo(() => {
     if (mode === 'metadata') {
-      return metadataSuggestions.map(m => ({ title: m.title, id: m.id, type: 'metadata', icon: FileText }))
+      return metadataSuggestions.map(m => ({ title: m.title, id: m.id, metadataType: m.metadataType, type: 'metadata', icon: FileText }))
     }
     return routes.filter(r => r.title.toLowerCase().includes(query.toLowerCase()))
   }, [mode, metadataSuggestions, routes, query])
@@ -60,7 +60,7 @@ function QuickSearch({ open, onOpenChange }) {
         const filters = { title: query.trim(), size: 10 }
         const res = await elasticsearchService.searchMetadataWithFilters(filters)
         // expect res.data to be array of items with id and title
-        let items = (res && res.data) ? res.data.map(it => ({ id: it.id, title: it.title })) : []
+        let items = (res && res.data) ? res.data.map(it => ({ id: it.id, title: it.title, metadataType: it.metadataType })) : []
 
         // If nothing found by title and the query looks like an id, try exact id lookup
         const isPossibleId = (q) => {
@@ -75,7 +75,7 @@ function QuickSearch({ open, onOpenChange }) {
             // exact id term query
             const idQuery = { term: { 'id.keyword': query.trim() } }
             const idRes = await elasticsearchService.searchMetadata(1, 0, idQuery)
-            const idItems = (idRes && idRes.data) ? idRes.data.map(it => ({ id: it.id, title: it.title })) : []
+            const idItems = (idRes && idRes.data) ? idRes.data.map(it => ({ id: it.id, title: it.title, metadataType: it.metadataType })) : []
             if (idItems.length > 0) items = idItems
           } catch {
             // ignore id lookup errors, already logged elsewhere
@@ -121,10 +121,11 @@ function QuickSearch({ open, onOpenChange }) {
     navigate(path)
   }
 
-  const handleMetadataOpen = (id) => {
+  const handleMetadataOpen = (id, metadataType) => {
     onOpenChange(false)
     try {
-      const url = `${API_ENDPOINTS.PYGEOAPI.BASE}${API_ENDPOINTS.PYGEOAPI.METADATA_ITEM_BY_ID(id, API_ENDPOINTS.PYGEOAPI.DEFAULT_COLLECTION)}`
+      const collection = metadataType?.toLowerCase() || API_ENDPOINTS.PYGEOAPI.DEFAULT_COLLECTION
+      const url = `${API_ENDPOINTS.PYGEOAPI.BASE}${API_ENDPOINTS.PYGEOAPI.METADATA_ITEM_BY_ID(id, collection)}`
       window.open(url, '_blank')
     } catch (err) {
       console.error('Failed to open metadata page', err)
@@ -146,14 +147,14 @@ function QuickSearch({ open, onOpenChange }) {
       if (highlightIndex >= 0 && highlightIndex < suggestions.length) {
         const s = suggestions[highlightIndex]
         if (s.type === 'metadata') {
-          handleMetadataOpen(s.id)
+          handleMetadataOpen(s.id, s.metadataType)
         } else {
           handleNavigate(s.path)
         }
       } else if (suggestions.length > 0) {
         const s = suggestions[0]
         if (s.type === 'metadata') {
-          handleMetadataOpen(s.id)
+          handleMetadataOpen(s.id, s.metadataType)
         } else {
           handleNavigate(s.path)
         }
@@ -220,7 +221,7 @@ function QuickSearch({ open, onOpenChange }) {
                     className={`w-full text-left p-2 rounded-md flex items-center gap-2 ${isActive ? 'bg-accent/50' : 'hover:bg-accent/40'}`}
                     onMouseEnter={() => setHighlightIndex(idx)}
                     onMouseLeave={() => setHighlightIndex(-1)}
-                    onClick={() => { if (s.type === 'metadata') { handleMetadataOpen(s.id) } else { handleNavigate(s.path) } }}
+                    onClick={() => { if (s.type === 'metadata') { handleMetadataOpen(s.id, s.metadataType) } else { handleNavigate(s.path) } }}
                   >
                     {Icon ? <Icon className="h-4 w-4" /> : <Search className="h-4 w-4" />}
                     <span>{s.title}</span>

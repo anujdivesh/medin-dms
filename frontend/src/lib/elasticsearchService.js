@@ -72,11 +72,8 @@ class ElasticsearchService {
         temporalTo: properties.temporal_coverage_to || 'Unknown',
         language: properties.language || 'Unknown',
         version: properties.version || 'Unknown',
-        // Which pygeoapi collection this record belongs to - the shared
-        // "metadata" ES index this query reads from predates metadata_type
-        // and never populated this, so it's normally absent; callers should
-        // fall back to API_ENDPOINTS.PYGEOAPI.DEFAULT_COLLECTION.
-        metadataType: properties.metadata_type_value,
+      
+        metadataType: hit._index || properties.metadata_type_value,
         // Bounding coordinates for map thumbnail
         west_bounding_longitude: properties.west_bounding_longitude,
         east_bounding_longitude: properties.east_bounding_longitude,
