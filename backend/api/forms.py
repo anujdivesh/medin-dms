@@ -25,6 +25,7 @@ CORE_FIELDS = [
     "east_bounding_longitude",
     "south_bounding_latitude",
     "north_bounding_latitude",
+    "boundary_polygon",
     "coordinate_reference_system",
     "publisher",
     "topic",

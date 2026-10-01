@@ -706,16 +706,16 @@ const PointsDisplay = ({ coordinates }) => {
   }
 
   return (
-    <div className="absolute top-20 right-4 z-[1000] bg-white bg-opacity-95 rounded-lg p-3 shadow-lg max-w-xs">
-      <div className="font-medium mb-2 text-sm text-gray-700">📍 Selected Points:</div>
+    <div className="absolute top-20 right-4 z-[1000] bg-popover/95 text-popover-foreground rounded-lg p-3 shadow-lg max-w-xs">
+      <div className="font-medium mb-2 text-sm">📍 Selected Points:</div>
       <div className="max-h-32 overflow-y-auto">
         {coordinates.map((coord, index) => (
-          <div key={index} className="text-xs text-gray-600 mb-1">
+          <div key={index} className="text-xs text-muted-foreground mb-1">
             Point {index + 1}: {coord[0].toFixed(4)}, {coord[1].toFixed(4)}
           </div>
         ))}
       </div>
-      <div className="text-xs text-gray-500 mt-2">
+      <div className="text-xs text-muted-foreground mt-2">
         Total: {coordinates.length} points
       </div>
     </div>
