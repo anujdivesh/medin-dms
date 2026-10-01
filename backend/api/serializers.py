@@ -1,6 +1,8 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from .models import (
+    BoundaryType,
     Contact,
     CoordinateReferenceSystem,
     Country,
@@ -261,6 +263,7 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
             "east_bounding_longitude",
             "south_bounding_latitude",
             "north_bounding_latitude",
+            "boundary_polygon",
             "crs_name",
             "coordinate_reference_system",
             "coordinate_reference_system_detail",
@@ -344,4 +347,25 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"temporal_coverage_to": "Must be on or after 'temporal_coverage_from'."}
             )
+
+        # Same polygon check + bounding-field derivation the admin gets from
+        # the model's clean(), run on the merged (instance + incoming) values.
+        boundary_fields = [
+            "boundary_type", "boundary_polygon",
+            "west_bounding_longitude", "east_bounding_longitude",
+            "south_bounding_latitude", "north_bounding_latitude",
+        ]
+        boundary = MetadataRecord(**{
+            name: attrs.get(name, getattr(self.instance, name, None))
+            for name in boundary_fields
+        })
+        if boundary.boundary_type is None:
+            boundary.boundary_type = BoundaryType.ZONE
+        try:
+            boundary.clean_boundary()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict)
+        if boundary.boundary_type == BoundaryType.POLYGON and boundary.boundary_polygon:
+            for name in boundary_fields[2:]:
+                attrs[name] = getattr(boundary, name)
         return attrs

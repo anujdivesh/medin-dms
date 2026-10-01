@@ -1,7 +1,7 @@
 // Admin helper: adds an interactive map next to the boundary_type field on
 // the MetadataRecord form, so the west/east/south/north_bounding_* fields
-// can be drawn (as a rectangle "zone" or a single "point") instead of typed
-// in by hand. Falls back to nothing if the fields aren't on the page (e.g.
+// (and boundary_polygon) can be drawn (as a rectangle "zone", a single
+// "point" or a "polygon") instead of typed in by hand. Falls back to nothing if the fields aren't on the page (e.g.
 // list view), and the raw number fields always keep working even if this
 // script or the Leaflet CDN fails to load.
 (function () {
@@ -33,13 +33,20 @@
     var eastField = document.getElementById("id_east_bounding_longitude");
     var southField = document.getElementById("id_south_bounding_latitude");
     var northField = document.getElementById("id_north_bounding_latitude");
+    var polygonField = document.getElementById("id_boundary_polygon");
     if (!typeField || !westField || !eastField || !southField || !northField) {
       return;
     }
 
-    var typeRow = typeField.closest(".form-row") || typeField.parentElement;
-    var eastRow = eastField.closest(".form-row") || eastField.parentElement;
-    var northRow = northField.closest(".form-row") || northField.parentElement;
+    function rowOf(field) {
+      return field ? field.closest(".form-row") || field.parentElement : null;
+    }
+    var typeRow = rowOf(typeField);
+    var westRow = rowOf(westField);
+    var eastRow = rowOf(eastField);
+    var southRow = rowOf(southField);
+    var northRow = rowOf(northField);
+    var polygonRow = rowOf(polygonField);
 
     var mapRow = document.createElement("div");
     mapRow.className = "form-row";
@@ -49,7 +56,7 @@
       '<button type="button" id="boundary-map-clear" class="button">Clear</button>' +
       "</div>" +
       '<div id="boundary-map" style="height: 350px; max-width: 700px; border: 1px solid #ccc;"></div>' +
-      '<p class="help">Click "Draw on map", then drag a rectangle (Zone) or click once (Point) - matches the toggle above. The fields above update automatically; you can also edit the numbers directly.</p>';
+      '<p class="help">Click "Draw on map", then drag a rectangle (Zone), click once (Point), or click each corner and then the first point again to finish (Polygon) - matches the toggle above. The fields update automatically; you can also edit them directly.</p>';
     typeRow.parentNode.insertBefore(mapRow, typeRow.nextSibling);
 
     loadCss("https://unpkg.com/leaflet@1.3.1/dist/leaflet.css");
@@ -63,7 +70,13 @@
       });
     });
 
-    var map, drawnItems, rectangleDrawer, markerDrawer;
+    var map, drawnItems, rectangleDrawer, markerDrawer, polygonDrawer;
+
+    function disableDrawers() {
+      rectangleDrawer.disable();
+      markerDrawer.disable();
+      polygonDrawer.disable();
+    }
 
     function initMap() {
       map = L.map("boundary-map").setView([-15, 175], 4);
@@ -111,6 +124,7 @@
 
       rectangleDrawer = new L.Draw.Rectangle(map, { shapeOptions: { color: "#0d6efd" } });
       markerDrawer = new L.Draw.Marker(map);
+      polygonDrawer = new L.Draw.Polygon(map, { shapeOptions: { color: "#0d6efd" } });
 
       map.on(L.Draw.Event.CREATED, function (e) {
         drawnItems.clearLayers();
@@ -120,23 +134,24 @@
 
       document.getElementById("boundary-map-draw").addEventListener("click", function () {
         drawnItems.clearLayers();
-        rectangleDrawer.disable();
-        markerDrawer.disable();
+        disableDrawers();
         if (typeField.value === "point") {
           markerDrawer.enable();
+        } else if (typeField.value === "polygon") {
+          polygonDrawer.enable();
         } else {
           rectangleDrawer.enable();
         }
       });
 
       document.getElementById("boundary-map-clear").addEventListener("click", function () {
-        rectangleDrawer.disable();
-        markerDrawer.disable();
+        disableDrawers();
         drawnItems.clearLayers();
         westField.value = "";
         eastField.value = "";
         southField.value = "";
         northField.value = "";
+        if (polygonField) polygonField.value = "";
       });
 
       typeField.addEventListener("change", updateFieldVisibility);
@@ -145,13 +160,32 @@
     }
 
     function updateFieldVisibility() {
-      var isPoint = typeField.value === "point";
-      if (eastRow) eastRow.style.display = isPoint ? "none" : "";
-      if (northRow) northRow.style.display = isPoint ? "none" : "";
+      var type = typeField.value;
+      // A polygon's bounding fields are derived from it on save, so only the
+      // polygon field itself is shown for that type.
+      function show(row, visible) {
+        if (row) row.style.display = visible ? "" : "none";
+      }
+      show(westRow, type !== "polygon");
+      show(southRow, type !== "polygon");
+      show(eastRow, type === "zone");
+      show(northRow, type === "zone");
+      show(polygonRow, type === "polygon");
     }
 
     function syncFieldsFromShape(layer) {
-      if (typeField.value === "point") {
+      if (typeField.value === "polygon") {
+        var ring = layer.getLatLngs()[0].map(function (ll) {
+          return [+ll.lng.toFixed(5), +ll.lat.toFixed(5)];
+        });
+        ring.push(ring[0]);
+        if (polygonField) polygonField.value = JSON.stringify(ring);
+        var pb = layer.getBounds();
+        westField.value = pb.getWest().toFixed(5);
+        eastField.value = pb.getEast().toFixed(5);
+        southField.value = pb.getSouth().toFixed(5);
+        northField.value = pb.getNorth().toFixed(5);
+      } else if (typeField.value === "point") {
         var latlng = layer.getLatLng ? layer.getLatLng() : layer.getBounds().getCenter();
         westField.value = latlng.lng.toFixed(5);
         southField.value = latlng.lat.toFixed(5);
@@ -167,6 +201,26 @@
     }
 
     function restoreExisting() {
+      if (typeField.value === "polygon") {
+        var ring;
+        try {
+          ring = JSON.parse(polygonField ? polygonField.value : "");
+        } catch (err) {
+          return;
+        }
+        if (!Array.isArray(ring) || ring.length < 3) {
+          return;
+        }
+        var poly = L.polygon(
+          ring.map(function (p) {
+            return [p[1], p[0]];
+          }),
+          { color: "#0d6efd" }
+        );
+        drawnItems.addLayer(poly);
+        map.fitBounds(poly.getBounds());
+        return;
+      }
       var w = parseFloat(westField.value);
       var s = parseFloat(southField.value);
       if (isNaN(w) || isNaN(s)) {

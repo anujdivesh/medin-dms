@@ -203,7 +203,7 @@ class MetadataRecordAdmin(admin.ModelAdmin):
             # Reloads the form with ?template=<id> when the dropdown changes.
             "api/metadata_record.js",
             # Draws the west/east/south/north_bounding_* fields as a
-            # rectangle (zone) or marker (point) on a Leaflet map.
+            # rectangle (zone), marker (point) or polygon on a Leaflet map.
             "api/boundary_map.js",
         )
 

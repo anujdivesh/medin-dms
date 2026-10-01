@@ -224,6 +224,7 @@ class AccessConstraints(models.TextChoices):
 class BoundaryType(models.TextChoices):
     ZONE = "zone", "Zone (bounding box)"
     POINT = "point", "Point"
+    POLYGON = "polygon", "Polygon"
 
 
 class CoreMetadata(models.Model):
@@ -237,9 +238,10 @@ class CoreMetadata(models.Model):
 
     Geographic bounds and the bounds' CRS name default to the related
     `country`'s, but a record can override them with its own precise
-    zone (bounding box) or point via `boundary_type` + the
-    `*_bounding_*` fields below - see the west/east/south/north_bound_*
-    properties for the override-or-fallback resolution.
+    zone (bounding box), point or polygon via `boundary_type` + the
+    `*_bounding_*` / `boundary_polygon` fields below - see the
+    west/east/south/north_bound_* properties for the override-or-fallback
+    resolution.
     """
 
     title = models.CharField(max_length=500)
@@ -262,7 +264,12 @@ class CoreMetadata(models.Model):
         max_length=10,
         choices=BoundaryType.choices,
         default=BoundaryType.ZONE,
-        help_text="Whether this record's own boundary (if set) is a zone (bounding box) or a single point",
+        help_text="Whether this record's own boundary (if set) is a zone (bounding box), a single point or a polygon",
+    )
+    boundary_polygon = models.JSONField(
+        null=True, blank=True,
+        help_text='Polygon only: the outer ring as [[lng, lat], ...]. The '
+        "bounding fields are filled in from its extent on save.",
     )
     west_bounding_longitude = models.DecimalField(
         max_digits=9, decimal_places=5, null=True, blank=True,
@@ -368,37 +375,68 @@ class CoreMetadata(models.Model):
     # related country's ---
 
     @property
-    def has_custom_boundary(self):
+    def polygon_ring(self):
+        """`boundary_polygon` as a closed ring of [lng, lat] floats, or None
+        if it isn't a usable polygon (fewer than 3 points / malformed)."""
+        try:
+            ring = [[float(lng), float(lat)] for lng, lat in self.boundary_polygon or []]
+        except (TypeError, ValueError):
+            return None
+        if ring and ring[0] == ring[-1]:
+            ring = ring[:-1]
+        if len(ring) < 3:
+            return None
+        return ring + [ring[0]]
+
+    @property
+    def custom_bounds(self):
+        """(west, east, south, north) of the record's own boundary, or None
+        when it has no complete one of the selected type."""
+        if self.boundary_type == BoundaryType.POLYGON:
+            ring = self.polygon_ring
+            if ring is None:
+                return None
+            lngs = [Decimal(str(round(lng, 5))) for lng, _ in ring]
+            lats = [Decimal(str(round(lat, 5))) for _, lat in ring]
+            return min(lngs), max(lngs), min(lats), max(lats)
         if self.boundary_type == BoundaryType.POINT:
-            return self.west_bounding_longitude is not None and self.south_bounding_latitude is not None
-        return None not in (
+            if self.west_bounding_longitude is None or self.south_bounding_latitude is None:
+                return None
+            return (
+                self.west_bounding_longitude, self.west_bounding_longitude,
+                self.south_bounding_latitude, self.south_bounding_latitude,
+            )
+        bounds = (
             self.west_bounding_longitude, self.east_bounding_longitude,
             self.south_bounding_latitude, self.north_bounding_latitude,
         )
+        return None if None in bounds else bounds
+
+    @property
+    def has_custom_boundary(self):
+        return self.custom_bounds is not None
+
+    def _bound(self, index, country_attr):
+        bounds = self.custom_bounds
+        if bounds is not None:
+            return bounds[index]
+        return getattr(self.country, country_attr)
 
     @property
     def west_bound_longitude(self):
-        if self.has_custom_boundary:
-            return self.west_bounding_longitude
-        return self.country.west_bound_longitude
+        return self._bound(0, "west_bound_longitude")
 
     @property
     def east_bound_longitude(self):
-        if self.has_custom_boundary:
-            return self.west_bounding_longitude if self.boundary_type == BoundaryType.POINT else self.east_bounding_longitude
-        return self.country.east_bound_longitude
+        return self._bound(1, "east_bound_longitude")
 
     @property
     def south_bound_latitude(self):
-        if self.has_custom_boundary:
-            return self.south_bounding_latitude
-        return self.country.south_bound_latitude
+        return self._bound(2, "south_bound_latitude")
 
     @property
     def north_bound_latitude(self):
-        if self.has_custom_boundary:
-            return self.south_bounding_latitude if self.boundary_type == BoundaryType.POINT else self.north_bounding_latitude
-        return self.country.north_bound_latitude
+        return self._bound(3, "north_bound_latitude")
 
     @property
     def crs_name(self):
@@ -455,9 +493,12 @@ class CoreMetadata(models.Model):
 
     @property
     def geojson_geometry(self):
-        """The precise GeoJSON geometry for this record: a Point when it has
-        its own point boundary, otherwise a Polygon built from the bounding
-        box (the record's own zone if set, else its country's)."""
+        """The precise GeoJSON geometry for this record: a Point / Polygon
+        when it has its own point / polygon boundary, otherwise a Polygon
+        built from the bounding box (the record's own zone if set, else its
+        country's)."""
+        if self.boundary_type == BoundaryType.POLYGON and self.has_custom_boundary:
+            return {"type": "Polygon", "coordinates": [self.polygon_ring]}
         if self.boundary_type == BoundaryType.POINT and self.has_custom_boundary:
             return {
                 "type": "Point",
@@ -476,6 +517,22 @@ class CoreMetadata(models.Model):
                 [west, south], [west, north], [east, north], [east, south], [west, south],
             ]],
         }
+
+    def clean_boundary(self):
+        """A polygon boundary must be a usable ring; its extent is copied into
+        the bounding fields so they stay meaningful (filters, list views)."""
+        if self.boundary_type != BoundaryType.POLYGON:
+            return
+        if not self.boundary_polygon:
+            return  # no own boundary - falls back to the country's
+        if self.polygon_ring is None:
+            raise ValidationError(
+                {"boundary_polygon": "Must be a list of at least 3 [lng, lat] points."}
+            )
+        (
+            self.west_bounding_longitude, self.east_bounding_longitude,
+            self.south_bounding_latitude, self.north_bounding_latitude,
+        ) = self.custom_bounds
 
     def clean_temporal_coverage(self):
         if (
@@ -590,10 +647,12 @@ class MetadataRecord(CoreMetadata, TimeStampedModel, LegacyImportedModel):
     def clean(self):
         """Validate `data` against the template's field definitions.
 
-        Runs automatically in the admin (full_clean) and is invoked explicitly
-        by the API serializer, so admin and API validation stay identical.
+        Runs automatically in the admin (full_clean). The API serializer
+        doesn't call it - its validate() repeats the same checks
+        (validate_record_data, temporal range, clean_boundary).
         """
         self.clean_temporal_coverage()
+        self.clean_boundary()
         if self.template_id is None or getattr(self, "_skip_data_clean", False):
             return
         errors = validate_record_data(self.template, self.data)
@@ -627,7 +686,7 @@ RECORD_SOURCE_CHOICES = [
     ("east_bound_longitude", "east_bound_longitude"),
     ("south_bound_latitude", "south_bound_latitude"),
     ("north_bound_latitude", "north_bound_latitude"),
-    ("boundary_type", "boundary_type (zone/point)"),
+    ("boundary_type", "boundary_type (zone/point/polygon)"),
     ("crs_name", "crs_name"),
     ("coordinate_reference_system.crs_value", "crs_value"),
     ("coordinate_reference_system.crs_description", "crs_description"),
