@@ -842,6 +842,11 @@ class ElasticsearchIndex(TimeStampedModel):
             if value not in (None, "", [], {}):
                 _set_nested(properties, field.target_key, value)
 
+        # OGC-API-Records core timestamps, sent for every index regardless of
+        # its field whitelist - the frontend sorts results by "created".
+        properties["created"] = record.created_at.isoformat()
+        properties["updated"] = record.updated_at.isoformat()
+
         if "contacts" in properties:
             # The reference index sends "contacts" as an array (one entry per
             # contact) even though a record here only ever has one - keep the

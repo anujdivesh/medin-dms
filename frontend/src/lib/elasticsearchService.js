@@ -1,11 +1,24 @@
 import { API_ENDPOINTS } from '@/config/apiEndpoints'
 
+// Result orderings offered in the search UI. 'default' sends no sort, so a
+// title search ranks by match score and an unfiltered search keeps ES order.
+// "created" is the record's created_at, which the backend adds to every document.
+const TITLE_SORT = (order) => ({ 'properties.title.keyword': { order, unmapped_type: 'keyword' } })
+const CREATED_SORT = (order) => ({ 'properties.created': { order, unmapped_type: 'date' } })
+export const SORT_OPTIONS = {
+  default: { label: 'Default', sort: null },
+  created_desc: { label: 'Date added (newest)', sort: [CREATED_SORT('desc')] },
+  created_asc: { label: 'Date added (oldest)', sort: [CREATED_SORT('asc')] },
+  title_asc: { label: 'Title A–Z', sort: [TITLE_SORT('asc')] },
+  title_desc: { label: 'Title Z–A', sort: [TITLE_SORT('desc')] },
+}
+
 class ElasticsearchService {
   constructor() {
     this.baseURL = API_ENDPOINTS.ELASTICSEARCH.BASE
   }
 
-  async searchMetadata(size = 10, from = 0, query = null) {
+  async searchMetadata(size = 10, from = 0, query = null, sort = null) {
     try {
       const searchBody = {
         size: size,
@@ -14,6 +27,7 @@ class ElasticsearchService {
           match_all: {}
         }
       }
+      if (sort) searchBody.sort = sort
 	  const auth = btoa(`${API_ENDPOINTS.ELASTICSEARCH.USERNAME}:${API_ENDPOINTS.ELASTICSEARCH.PASSWORD}`)
       const response = await fetch(`${this.baseURL}${API_ENDPOINTS.ELASTICSEARCH.METADATA_SEARCH}`, {
         method: 'POST',
@@ -266,7 +280,8 @@ class ElasticsearchService {
         from = filters.page * cappedSize
       }
 
-      return await this.searchMetadata(cappedSize, from, query)
+      const sort = SORT_OPTIONS[filters.sort]?.sort || null
+      return await this.searchMetadata(cappedSize, from, query, sort)
     } catch (error) {
       console.error('Error searching metadata with filters:', error)
       throw error

@@ -1,7 +1,8 @@
 """Send metadata records to Elasticsearch, one document per record.
 
 Which fields are sent is decided entirely by the ElasticsearchIndex rows and
-their field whitelist — this command never invents fields of its own.
+their field whitelist — this command never invents fields of its own (every
+document also carries the record's created/updated timestamps).
 
     python manage.py push_to_elasticsearch --dry-run
     python manage.py push_to_elasticsearch --index dms-records --create-index
