@@ -221,8 +221,13 @@ class AccessConstraints(models.TextChoices):
     OPEN = "open", "Open"
 
 
+# Upper bound for a record's own longitudes (lower bound is 0) - see
+# MetadataRecord.clean_coordinate_ranges. Mirrored in boundary_map.js.
+MAX_LONGITUDE = 300
+
+
 class BoundaryType(models.TextChoices):
-    ZONE = "zone", "Zone (bounding box)"
+    ZONE = "zone", "Bounding box"
     POINT = "point", "Point"
     POLYGON = "polygon", "Polygon"
 
@@ -520,19 +525,51 @@ class CoreMetadata(models.Model):
 
     def clean_boundary(self):
         """A polygon boundary must be a usable ring; its extent is copied into
-        the bounding fields so they stay meaningful (filters, list views)."""
-        if self.boundary_type != BoundaryType.POLYGON:
-            return
-        if not self.boundary_polygon:
-            return  # no own boundary - falls back to the country's
-        if self.polygon_ring is None:
-            raise ValidationError(
-                {"boundary_polygon": "Must be a list of at least 3 [lng, lat] points."}
-            )
-        (
-            self.west_bounding_longitude, self.east_bounding_longitude,
-            self.south_bounding_latitude, self.north_bounding_latitude,
-        ) = self.custom_bounds
+        the bounding fields so they stay meaningful (filters, list views).
+        Every boundary must then be in range - see clean_coordinate_ranges."""
+        if self.boundary_type == BoundaryType.POLYGON and self.boundary_polygon:
+            if self.polygon_ring is None:
+                raise ValidationError(
+                    {"boundary_polygon": "Must be a list of at least 3 [lng, lat] points."}
+                )
+            (
+                self.west_bounding_longitude, self.east_bounding_longitude,
+                self.south_bounding_latitude, self.north_bounding_latitude,
+            ) = self.custom_bounds
+        self.clean_coordinate_ranges()
+
+    def clean_coordinate_ranges(self):
+        """Longitudes are stored east-positive past 180 (not -180..180) so
+        Pacific boundaries never straddle the antimeridian: 174.35 W is
+        stored as 185.65. Capped at MAX_LONGITUDE, which covers the Pacific
+        out to the Americas. Latitudes stay -90..90, negative south of the
+        equator."""
+        longitudes = ["west_bounding_longitude", "east_bounding_longitude"]
+        latitudes = ["south_bounding_latitude", "north_bounding_latitude"]
+        if self.boundary_type == BoundaryType.POINT:
+            # A point only uses west/south; east/north are ignored.
+            longitudes, latitudes = longitudes[:1], latitudes[:1]
+
+        errors = {}
+        for name in longitudes:
+            value = getattr(self, name)
+            if value is not None and not 0 <= value <= MAX_LONGITUDE:
+                errors[name] = (
+                    f"Longitude must be between 0 and {MAX_LONGITUDE}. For a west "
+                    f"longitude add 360 (e.g. -174.35 becomes 185.65); got {value}."
+                )
+        for name in latitudes:
+            value = getattr(self, name)
+            if value is not None and not -90 <= value <= 90:
+                errors[name] = f"Latitude must be between -90 and 90; got {value}."
+        if errors and self.boundary_type == BoundaryType.POLYGON:
+            # The bounding fields are hidden for a polygon - report on the ring.
+            errors = {
+                "boundary_polygon": f"Longitudes must be between 0 and {MAX_LONGITUDE} "
+                "(add 360 to negative values) and latitudes between -90 and 90."
+            }
+        if errors:
+            raise ValidationError(errors)
 
     def clean_temporal_coverage(self):
         if (

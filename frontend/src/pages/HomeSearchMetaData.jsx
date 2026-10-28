@@ -12,7 +12,7 @@ import { Loader2, X, MapPin, HelpCircle, PenTool } from 'lucide-react'
 import { elasticsearchService } from '@/lib/elasticsearchService'
 
 import MapComponent from '@/components/ui/map-component'
-import { getCountryCenter } from '@/utils/countryCoordinates'
+import { apiService } from '@/lib/apiClient'
 import RequestDataButton from '@/components/RequestDataButton'
 import MetadataMapThumbnail from '@/components/Metadata/MetadataMapThumbnail'
 import RequestMultipleDataButton from '@/components/RequestMultipleDataButton'
@@ -172,84 +172,42 @@ function HomeSearchMetaData() {
   const [ellipsisValue, setEllipsisValue] = useState('')
   const [ellipsisInvalid, setEllipsisInvalid] = useState(false)
   const [bboxFilteredIds, setBboxFilteredIds] = useState(null) // null | number[]
+  const [countries, setCountries] = useState([]) // backend Country rows, for map zoom
   const [searchParams] = useSearchParams()
   const location = useLocation()
   const titleDebounceRef = useRef(null)
 
-  const boxesSource = results
-
-  const allResultBoxes = React.useMemo(() => {
-    const toNum = (v) => {
-      const n = typeof v === 'number' ? v : parseFloat(v)
-      return Number.isFinite(n) ? n : NaN
+  // Each result's GeoJSON geometry, exactly as the backend sent it, plus its
+  // extent read straight off those coordinates (0-360 longitudes, the same
+  // space the map draws and reports clicks in - so nothing is converted).
+  const resultFeatures = React.useMemo(() => {
+    const geometryBounds = (geometry) => {
+      const coords = geometry?.type === 'Point'
+        ? [geometry.coordinates]
+        : geometry?.type === 'Polygon' ? geometry.coordinates?.[0] : null
+      if (!Array.isArray(coords) || coords.length === 0) return null
+      const lngs = coords.map(c => c?.[0]).filter(Number.isFinite)
+      const lats = coords.map(c => c?.[1]).filter(Number.isFinite)
+      if (lngs.length === 0 || lats.length === 0) return null
+      return [
+        [Math.min(...lats), Math.min(...lngs)],
+        [Math.max(...lats), Math.max(...lngs)]
+      ]
     }
 
-    return (boxesSource || [])
+    return (results || [])
       .map((item) => {
-        const west = toNum(item?.west_bounding_longitude)
-        const east = toNum(item?.east_bounding_longitude)
-        const south = toNum(item?.south_bounding_latitude)
-        const north = toNum(item?.north_bounding_latitude)
-        const valid = [west, east, south, north].every(Number.isFinite)
-        if (!valid) return null
-
-        return {
-          id: item?.id,
-          title: item?.title,
-          bounds: [
-            [south, west],
-            [north, east]
-          ]
-        }
+        const bounds = geometryBounds(item?.geometry)
+        return bounds ? { id: item.id, title: item.title, geometry: item.geometry, bounds } : null
       })
       .filter(Boolean)
-  }, [boxesSource])
-
-  const drawResultBoxes = React.useMemo(() => {
-    const clamp = (n, min, max) => Math.min(max, Math.max(min, n))
-    const normLng = (lng) => {
-      const x = ((lng + 180) % 360 + 360) % 360
-      return x - 180
-    }
-
-    const out = []
-    ;(allResultBoxes || []).forEach((b) => {
-      if (!b?.id || !b?.bounds || b.bounds.length !== 2) return
-      const [[southRaw, westRaw], [northRaw, eastRaw]] = b.bounds
-      const south = clamp(southRaw, -90, 90)
-      const north = clamp(northRaw, -90, 90)
-
-      let west = normLng(westRaw)
-      let east = normLng(eastRaw)
-
-      // Some sources encode Pacific bboxes in a way that yields a very wide span
-      // (e.g. west=-170, east=170). In those cases, the intended bbox is usually
-      // the *short* span across the dateline, so treat it as antimeridian-crossing.
-      const span = east - west
-      if (Number.isFinite(span) && span > 180) {
-        const tmp = west
-        west = east
-        east = tmp
-      }
-
-      if (west > east) {
-        out.push({ ...b, bounds: [[south, west], [north, 180]] })
-        out.push({ ...b, bounds: [[south, -180], [north, east]] })
-      } else {
-        out.push({ ...b, bounds: [[south, west], [north, east]] })
-      }
-    })
-    return out
-  }, [allResultBoxes])
+  }, [results])
 
   const displayResults = React.useMemo(() => {
     if (!bboxFilteredIds || bboxFilteredIds.length === 0) return results
     const set = new Set(bboxFilteredIds)
     return (results || []).filter(r => set.has(r.id))
   }, [results, bboxFilteredIds])
-
-  // Keep all bounding boxes on the map at all times; filtering affects only the results list.
-  const resultBoxes = drawResultBoxes
 
   const boundsOverlap = (a, b) => {
     if (!a || !b || a.length !== 2 || b.length !== 2) return false
@@ -260,31 +218,22 @@ function HomeSearchMetaData() {
     return aWest <= bEast && aEast >= bWest && aSouth <= bNorth && aNorth >= bSouth
   }
 
-  const handleResultBoxClick = (box, latlng) => {
-    if (!box?.id) return
+  // Clicking a result on the map narrows the list to everything at that spot.
+  const handleResultFeatureClick = (feature, latlng) => {
+    if (!feature?.id) return
 
-    if (latlng && Number.isFinite(latlng.lat) && Number.isFinite(latlng.lng)) {
-      const lat = latlng.lat
-      const lng = (((latlng.lng + 180) % 360 + 360) % 360) - 180
-      const containsPoint = (bounds) => {
-        if (!bounds || bounds.length !== 2) return false
-        const [[south, west], [north, east]] = bounds
-        return lat >= south && lat <= north && lng >= west && lng <= east
-      }
+    // A point is a few pixels wide, so the click lands *near* it rather than
+    // on it - match on the point itself (other points there + boxes around it).
+    const clickBounds = feature.geometry?.type !== 'Point' && latlng && Number.isFinite(latlng.lat) && Number.isFinite(latlng.lng)
+      ? [[latlng.lat, latlng.lng], [latlng.lat, latlng.lng]]
+      : feature.bounds
 
-      const ids = Array.from(new Set(
-        (drawResultBoxes || [])
-          .filter(b => b?.id && containsPoint(b.bounds))
-          .map(b => b.id)
-      ))
-
-      setBboxFilteredIds(ids.length > 0 ? ids : [box.id])
-    } else {
-      const overlapping = (allResultBoxes || [])
-        .filter(b => b?.id && b?.bounds && box?.bounds && boundsOverlap(b.bounds, box.bounds))
-        .map(b => b.id)
-      setBboxFilteredIds(overlapping.length > 0 ? overlapping : [box.id])
-    }
+    const ids = Array.from(new Set(
+      resultFeatures
+        .filter(f => boundsOverlap(f.bounds, clickBounds))
+        .map(f => f.id)
+    ))
+    setBboxFilteredIds(ids.length > 0 ? ids : [feature.id])
 
     const header = document.getElementById('search-results')
     if (header && typeof header.scrollIntoView === 'function') {
@@ -314,9 +263,9 @@ function HomeSearchMetaData() {
       [maxLat, maxLng]
     ]
 
-    const overlapping = (allResultBoxes || [])
-      .filter(b => b?.id && b?.bounds && boundsOverlap(b.bounds, polygonBounds))
-      .map(b => b.id)
+    const overlapping = resultFeatures
+      .filter(f => boundsOverlap(f.bounds, polygonBounds))
+      .map(f => f.id)
 
     setBboxFilteredIds(overlapping)
   }
@@ -406,6 +355,34 @@ function HomeSearchMetaData() {
     fetchOptions()
   }, [])
 
+  // Country extents come from the backend (the same table records fall back
+  // to), so the map centres on exactly the coordinates the backend uses.
+  useEffect(() => {
+    async function fetchCountries() {
+      try {
+        const response = await apiService.request('/countries')
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
+        const body = await response.json()
+        setCountries(body?.data?.countries || [])
+      } catch (error) {
+        console.error('Failed to load country extents:', error)
+      }
+    }
+    fetchCountries()
+  }, [])
+
+  const getCountryView = (name) => {
+    const wanted = String(name || '').trim().toLowerCase()
+    const country = countries.find(c => String(c.long_name || '').trim().toLowerCase() === wanted)
+    if (!country) return null
+    const west = parseFloat(country.west_bound_longitude)
+    const east = parseFloat(country.east_bound_longitude)
+    const south = parseFloat(country.south_bound_latitude)
+    const north = parseFloat(country.north_bound_latitude)
+    if (![west, east, south, north].every(Number.isFinite)) return null
+    return { lat: (south + north) / 2, lng: (west + east) / 2, zoom: 6 }
+  }
+
   // Handle search parameter from URL (e.g., from notifications)
   useEffect(() => {
     const searchTerm = searchParams.get('search')
@@ -465,7 +442,7 @@ function HomeSearchMetaData() {
 
     // If country is selected, zoom map to that country
     if (key === 'country' && value && value !== '' && value !== 'All Countries') {
-      const countryCoords = getCountryCenter(value)
+      const countryCoords = getCountryView(value)
       if (countryCoords) {
         setMapCenter({ lat: countryCoords.lat, lng: countryCoords.lng })
         setMapZoom(countryCoords.zoom)
@@ -946,8 +923,8 @@ function HomeSearchMetaData() {
                       zoom={mapZoom}
                       className="w-full h-full min-h-[320px]"
                       currentPolygon={selectedPolygon}
-                      resultBoxes={resultBoxes}
-                      onResultBoxClick={handleResultBoxClick}
+                      resultFeatures={resultFeatures}
+                      onResultFeatureClick={handleResultFeatureClick}
                       onPolygonClick={handlePolygonClick}
                     />
                   </TourStep>

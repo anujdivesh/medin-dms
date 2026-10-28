@@ -4,116 +4,23 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import 'leaflet-draw'
+import 'leaflet.markercluster'
+import 'leaflet.markercluster/dist/MarkerCluster.css'
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
+import { RESULT_STYLE, POINT_ICON, CLUSTER_OPTIONS } from './map-styles'
 
+// Longitudes from the backend are 0-360 (Tonga ~185, Cook Islands ~202), and
+// Leaflet draws them as-is beside this 179°E centre - so geometries are never
+// wrapped, split or shifted here; the backend says exactly where to draw.
 const DEFAULT_CENTER = [-8, 179.3053]
 const DEFAULT_ZOOM = 4
-
-const wrap360 = (lng) => {
-  const n = typeof lng === 'number' ? lng : parseFloat(lng)
-  if (!Number.isFinite(n)) return NaN
-  return ((n % 360) + 360) % 360
-}
-
-// Choose a cut line that avoids the densest cluster, producing the smallest
-// longitudinal span when boxes are near the antimeridian.
-const computeBestCut = (angles360) => {
-  const vals = (angles360 || []).filter(Number.isFinite)
-  if (vals.length === 0) return 0
-  vals.sort((a, b) => a - b)
-
-  let maxGap = -1
-  let bestStart = vals[0]
-  for (let i = 0; i < vals.length; i++) {
-    const curr = vals[i]
-    const next = (i === vals.length - 1) ? (vals[0] + 360) : vals[i + 1]
-    const gap = next - curr
-    if (gap > maxGap) {
-      maxGap = gap
-      // minimal covering arc starts at the element AFTER the largest gap
-      bestStart = (i === vals.length - 1) ? vals[0] : vals[i + 1]
-    }
-  }
-  return bestStart
-}
-
-const computeCutForBoxes = (boxes) => {
-  const endpoints360 = []
-  const list = Array.isArray(boxes) ? boxes : []
-  for (const b of list) {
-    if (!b || !b.bounds || b.bounds.length !== 2) continue
-    const [[south, west], [north, east]] = b.bounds
-    if (!Number.isFinite(south) || !Number.isFinite(north)) continue
-    const w = wrap360(west)
-    const e = wrap360(east)
-    if (!Number.isFinite(w) || !Number.isFinite(e)) continue
-    endpoints360.push(w, e)
-  }
-  return computeBestCut(endpoints360)
-}
-
-const unwrapBoundsRelativeToCut = (bounds, cut) => {
-  if (!bounds || bounds.length !== 2) return null
-  const [[south, west], [north, east]] = bounds
-  if (!Number.isFinite(south) || !Number.isFinite(north)) return null
-
-  let w = wrap360(west)
-  let e = wrap360(east)
-  if (!Number.isFinite(w) || !Number.isFinite(e)) return null
-
-  // Unwrap into a continuous range starting at `cut`
-  if (w < cut) w += 360
-  if (e < cut) e += 360
-  if (e < w) e += 360
-
-  return [[south, w], [north, e]]
-}
-
-const wrap180 = (lng) => {
-  const n = typeof lng === 'number' ? lng : parseFloat(lng)
-  if (!Number.isFinite(n)) return NaN
-  const x = ((n + 180) % 360 + 360) % 360
-  return x - 180
-}
-
-// Normalize a bbox into Leaflet-friendly bounds in [-180, 180] and split if it
-// crosses the antimeridian. Returns an array of bounds (1 or 2 items).
-const normalizeAndSplitBounds180 = (bounds) => {
-  if (!bounds || bounds.length !== 2) return []
-  const [[southRaw, westRaw], [northRaw, eastRaw]] = bounds
-
-  const south = Math.min(90, Math.max(-90, typeof southRaw === 'number' ? southRaw : parseFloat(southRaw)))
-  const north = Math.min(90, Math.max(-90, typeof northRaw === 'number' ? northRaw : parseFloat(northRaw)))
-  let west = wrap180(westRaw)
-  let east = wrap180(eastRaw)
-  if (![south, north, west, east].every(Number.isFinite)) return []
-
-  // If encoded as an almost-worldwide span (e.g. -170..170), prefer the short
-  // span across the dateline.
-  const span = east - west
-  if (Number.isFinite(span) && span > 180) {
-    const tmp = west
-    west = east
-    east = tmp
-  }
-
-  if (west > east) {
-    return [
-      [[south, west], [north, 180]],
-      [[south, -180], [north, east]]
-    ]
-  }
-
-  return [
-    [[south, west], [north, east]]
-  ]
-}
 
 // Fix Leaflet default markers
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
   iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 })
 
 // Custom SPC Attribution Component
@@ -485,216 +392,76 @@ const DefaultTileLayer = () => {
   return null
 }
 
-// Search Results Bounding Boxes Layer
-// Expects bounds in Leaflet format: [[southLat, westLng], [northLat, eastLng]]
-const ResultsBoundingBoxesLayer = ({ boxes, onBoxClick, cut, unwrap, referenceLng }) => {
+// Search results, drawn exactly as the backend's GeoJSON geometry says:
+// a Polygon as its outline, a Point as a dot - nearby points group into a
+// numbered cluster bubble that splits apart as you zoom in.
+// Expects features as [{ id, title, geometry }].
+const bindResultClick = (layer, result, onClickRef) => {
+  layer.on('click', (e) => {
+    const cb = onClickRef.current
+    if (cb) cb(result, e?.latlng)
+  })
+}
+
+const ResultsFeaturesLayer = ({ features, onFeatureClick }) => {
   const map = useMap()
   const layerRef = useRef(null)
-  const onBoxClickRef = useRef(onBoxClick)
-  const [effectiveRefLng, setEffectiveRefLng] = useState(referenceLng)
-  const lastWrappedCenterRef = useRef(null)
-  const unwrappedCenterRef = useRef(referenceLng)
+  const clusterRef = useRef(null)
+  const onFeatureClickRef = useRef(onFeatureClick)
 
   useEffect(() => {
-    onBoxClickRef.current = onBoxClick
-  }, [onBoxClick])
-
-  useEffect(() => {
-    // When the parent changes referenceLng (e.g. user selects a country), snap to it.
-    setEffectiveRefLng(referenceLng)
-    const wrapped = wrap180(referenceLng)
-    lastWrappedCenterRef.current = Number.isFinite(wrapped) ? wrapped : null
-    unwrappedCenterRef.current = Number.isFinite(referenceLng) ? referenceLng : wrapped
-  }, [referenceLng])
+    onFeatureClickRef.current = onFeatureClick
+  }, [onFeatureClick])
 
   useEffect(() => {
     if (!map) return
 
-    const paneName = 'results-bboxes'
+    const paneName = 'results-features'
     if (!map.getPane(paneName)) {
       const pane = map.createPane(paneName)
       pane.style.zIndex = 250
     }
 
-    if (!layerRef.current) {
-      layerRef.current = L.featureGroup()
-      layerRef.current.addTo(map)
-    }
+    layerRef.current = L.geoJSON(null, {
+      pane: paneName,
+      style: () => RESULT_STYLE,
+      onEachFeature: (feature, layer) => bindResultClick(layer, feature.properties.result, onFeatureClickRef)
+    }).addTo(map)
+
+    clusterRef.current = L.markerClusterGroup(CLUSTER_OPTIONS).addTo(map)
 
     return () => {
-      if (layerRef.current) {
-        map.removeLayer(layerRef.current)
-        layerRef.current = null
-      }
+      map.removeLayer(layerRef.current)
+      map.removeLayer(clusterRef.current)
+      layerRef.current = null
+      clusterRef.current = null
     }
   }, [map])
 
   useEffect(() => {
-    if (!map) return
+    if (!layerRef.current || !clusterRef.current) return
 
-    // After user pans/zooms (including worldCopyJump wraps), re-anchor the
-    // bbox shifting so we don't "lose" half the dateline boxes.
-    const onMoveEnd = () => {
-      try {
-        const wrapped = wrap180(map.getCenter()?.lng)
-        if (!Number.isFinite(wrapped)) return
-
-        const prevWrapped = lastWrappedCenterRef.current
-        if (!Number.isFinite(prevWrapped)) {
-          lastWrappedCenterRef.current = wrapped
-          unwrappedCenterRef.current = wrapped
-          setEffectiveRefLng(wrapped)
-          return
-        }
-
-        // Track an unwrapped longitude so boxes remain visible even if the
-        // user pans into another world copy (Leaflet wraps getCenter().lng).
-        let delta = wrapped - prevWrapped
-        if (delta > 180) delta -= 360
-        if (delta < -180) delta += 360
-
-        const base = Number.isFinite(unwrappedCenterRef.current) ? unwrappedCenterRef.current : prevWrapped
-        const nextUnwrapped = base + delta
-
-        lastWrappedCenterRef.current = wrapped
-        unwrappedCenterRef.current = nextUnwrapped
-        setEffectiveRefLng(nextUnwrapped)
-      } catch {
-        // ignore
-      }
-    }
-
-    map.on('moveend', onMoveEnd)
-    return () => {
-      map.off('moveend', onMoveEnd)
-    }
-  }, [map])
-
-  useEffect(() => {
-    if (!map || !layerRef.current) return
-
-    const paneName = 'results-bboxes'
     layerRef.current.clearLayers()
-
-    const ref = (typeof effectiveRefLng === 'number' && Number.isFinite(effectiveRefLng))
-      ? effectiveRefLng
-      : wrap180(effectiveRefLng)
-
-    const list = Array.isArray(boxes) ? boxes : []
-    list.forEach((b) => {
-      if (!b || !b.bounds || b.bounds.length !== 2) return
-
-      const boundsList = unwrap
-        ? (() => {
-          // Keep rectangles in the same world copy that auto-fit uses.
-          const unwrapped = unwrapBoundsRelativeToCut(b.bounds, Number.isFinite(cut) ? cut : 0)
-          return unwrapped ? [unwrapped] : []
-        })()
-        : normalizeAndSplitBounds180(b.bounds)
-
-      boundsList.forEach((bounds) => {
-        // If the bbox was split at the antimeridian, Leaflet will render the two
-        // parts on opposite sides of the world. Shift by ±360° so parts stay
-        // near the reference longitude (default center or selected country).
-        let renderBounds = bounds
-        if (Number.isFinite(ref)) {
-          const [[south, west], [north, east]] = bounds
-          const midLng = (west + east) / 2
-          let shift = 0
-          let delta = midLng - ref
-          while (delta < -180) {
-            shift += 360
-            delta += 360
-          }
-          while (delta > 180) {
-            shift -= 360
-            delta -= 360
-          }
-          if (shift !== 0) {
-            renderBounds = [[south, west + shift], [north, east + shift]]
-          }
-        }
-
-        const rect = L.rectangle(renderBounds, {
-          color: '#3b82f6',
-          weight: 2,
-          fillColor: '#3b82f6',
-          fillOpacity: 0.08,
-          pane: paneName
-        })
-
-        rect.on('click', (e) => {
-          const cb = onBoxClickRef.current
-          if (cb) cb(b, e?.latlng)
-        })
-
-        rect.addTo(layerRef.current)
-      })
+    clusterRef.current.clearLayers()
+    const points = []
+    ;(Array.isArray(features) ? features : []).forEach((f) => {
+      if (!f?.geometry) return
+      if (f.geometry.type === 'Point') {
+        const [lng, lat] = f.geometry.coordinates || []
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return
+        const marker = L.marker([lat, lng], { icon: L.divIcon(POINT_ICON), title: f.title || '' })
+        bindResultClick(marker, f, onFeatureClickRef)
+        points.push(marker)
+        return
+      }
+      try {
+        layerRef.current.addData({ type: 'Feature', geometry: f.geometry, properties: { result: f } })
+      } catch {
+        // skip a malformed geometry rather than break the whole layer
+      }
     })
-  }, [map, boxes, cut, unwrap, effectiveRefLng])
-
-  return null
-}
-
-// Auto-fit map to show all current result bounding boxes (used for "All Countries")
-const ResultsFitBoundsController = ({ boxes, enabled, cut }) => {
-  const map = useMap()
-
-  useEffect(() => {
-    if (!map || !enabled) return
-
-    const list = Array.isArray(boxes) ? boxes : []
-    if (list.length === 0) return
-
-    // Collect endpoints for cut selection
-    const endpoints360 = []
-    for (const b of list) {
-      if (!b || !b.bounds || b.bounds.length !== 2) continue
-      const [[south, west], [north, east]] = b.bounds
-      if (!Number.isFinite(south) || !Number.isFinite(north) || !Number.isFinite(west) || !Number.isFinite(east)) continue
-      endpoints360.push(wrap360(west), wrap360(east))
-    }
-
-    if (endpoints360.length === 0) return
-
-    const chosenCut = Number.isFinite(cut) ? cut : computeBestCut(endpoints360)
-
-    let minLat = Infinity
-    let maxLat = -Infinity
-    let minLng = Infinity
-    let maxLng = -Infinity
-
-    for (const b of list) {
-      if (!b || !b.bounds || b.bounds.length !== 2) continue
-      const [[south, west], [north, east]] = b.bounds
-      if (!Number.isFinite(south) || !Number.isFinite(north) || !Number.isFinite(west) || !Number.isFinite(east)) continue
-
-      minLat = Math.min(minLat, south)
-      maxLat = Math.max(maxLat, north)
-
-      let w = wrap360(west)
-      let e = wrap360(east)
-      if (w < chosenCut) w += 360
-      if (e < chosenCut) e += 360
-      if (e < w) e += 360
-
-      minLng = Math.min(minLng, w)
-      maxLng = Math.max(maxLng, e)
-    }
-
-    if (!Number.isFinite(minLat) || !Number.isFinite(maxLat) || !Number.isFinite(minLng) || !Number.isFinite(maxLng)) return
-
-    // Avoid trying to fit an almost-worldwide span; keep current view instead.
-    if (maxLng - minLng > 350) return
-
-    const combined = L.latLngBounds([[minLat, minLng], [maxLat, maxLng]])
-    if (!combined.isValid()) return
-
-    map.fitBounds(combined, {
-      padding: [20, 20],
-      animate: true
-    })
-  }, [map, boxes, enabled, cut])
+    clusterRef.current.addLayers(points)
+  }, [features])
 
   return null
 }
@@ -722,18 +489,13 @@ const PointsDisplay = ({ coordinates }) => {
   )
 }
 
-const MapComponent = ({ onPolygonDrawn, center, zoom, className = "", currentPolygon, resultBoxes = [], onResultBoxClick, onPolygonClick }) => {
+const MapComponent = ({ onPolygonDrawn, center, zoom, className = "", currentPolygon, resultFeatures = [], onResultFeatureClick, onPolygonClick }) => {
   const defaultCenter = DEFAULT_CENTER
   const defaultZoom = DEFAULT_ZOOM
   const [currentCoordinates, setCurrentCoordinates] = useState(null)
 
   const resetToDefault = !center && (!currentPolygon || currentPolygon.length === 0)
 
-  // UX requirement: never auto-zoom/fit to results when "All Countries" is selected.
-  const autoFitEnabled = false
-  const resultsCut = React.useMemo(() => computeCutForBoxes(resultBoxes), [resultBoxes])
-  const referenceLng = center?.lng ?? defaultCenter[1]
-  
   // Handle polygon drawn callback
   const handlePolygonDrawn = (coordinates) => {
     setCurrentCoordinates(coordinates)
@@ -749,7 +511,7 @@ const MapComponent = ({ onPolygonDrawn, center, zoom, className = "", currentPol
         zoom={zoom || defaultZoom}
         className="w-full h-full"
         style={{ minHeight: '320px' }}
-        scrollWheelZoom={false}
+        scrollWheelZoom={true}
         worldCopyJump={false}
         doubleClickZoom={false} // Disable double-click zoom to use for polygon completion
       >
@@ -770,18 +532,11 @@ const MapComponent = ({ onPolygonDrawn, center, zoom, className = "", currentPol
           defaultZoom={defaultZoom}
         />
 
-        {/* If no explicit center/polygon, auto-fit to show all result boxes */}
-        <ResultsFitBoundsController
-          boxes={resultBoxes}
-          enabled={autoFitEnabled}
-          cut={resultsCut}
-        />
-        
         {/* Add Leaflet Draw Controls */}
         <LeafletDrawControls onPolygonDrawn={handlePolygonDrawn} currentPolygon={currentPolygon} onPolygonClick={onPolygonClick} />
 
-        {/* Draw bounding boxes for current results */}
-        <ResultsBoundingBoxesLayer boxes={resultBoxes} onBoxClick={onResultBoxClick} cut={resultsCut} unwrap={autoFitEnabled} referenceLng={referenceLng} />
+        {/* Draw current results' geometries (points, boxes, polygons) */}
+        <ResultsFeaturesLayer features={resultFeatures} onFeatureClick={onResultFeatureClick} />
         
         {/* Add MapResetControl */}
         <MapResetControl />

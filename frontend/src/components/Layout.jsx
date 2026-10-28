@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import { Link, useLocation, useNavigate } from "react-router-dom"
-import { getBrandName, getBasePath } from "@/config/app"
+import { getBrandName, getBasePath, getAdminURL } from "@/config/app"
 import { useTheme } from "@/components/theme-provider"
 import DynamicBreadcrumb from "@/components/DynamicBreadcrumb"
 import { ModeToggle } from "@/components/mode-toggle"
@@ -22,7 +22,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
-import { Home, HelpCircle } from "lucide-react"
+import { Home, HelpCircle, LogIn } from "lucide-react"
 
 function StartTourSidebarButton() {
   const location = useLocation()
@@ -144,7 +144,17 @@ function Layout({ children }) {
                 <SidebarGroupContent>
                   <div className="flex justify-between items-center p-2 gap-2">
                     <ModeToggle />
-                    <StartTourSidebarButton />
+                    <div className="flex items-center gap-1">
+                      <StartTourSidebarButton />
+                      <a
+                        href={getAdminURL()}
+                        className="inline-flex items-center gap-1 text-sm text-white hover:text-white px-2 py-1 rounded-md border border-transparent hover:border-border"
+                        title="Log in to manage records"
+                      >
+                        <LogIn className="h-4 w-4" />
+                        <span>Login</span>
+                      </a>
+                    </div>
                   </div>
                 </SidebarGroupContent>
               </SidebarGroup>

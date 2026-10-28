@@ -48,6 +48,108 @@
     var northRow = rowOf(northField);
     var polygonRow = rowOf(polygonField);
 
+    // Live range checks, mirroring MetadataRecord.clean_coordinate_ranges so
+    // a bad value is flagged while typing / drawing instead of only on save.
+    // Set up before the map loads so they still work if the CDN fails.
+    // MAX_LNG mirrors MAX_LONGITUDE in models.py.
+    var MAX_LNG = 300;
+
+    function lngError(value) {
+      if (value >= 0 && value <= MAX_LNG) return "";
+      var message = "Longitude must be between 0 and " + MAX_LNG + ".";
+      if (value < 0 && value >= -180 && value + 360 <= MAX_LNG) {
+        message += " For a west longitude add 360: use " + (value + 360).toFixed(5) + ".";
+      }
+      return message;
+    }
+
+    function latError(value) {
+      return value >= -90 && value <= 90 ? "" : "Latitude must be between -90 and 90.";
+    }
+
+    function numberError(field, check) {
+      var text = field.value.trim();
+      if (text === "") return "";
+      var value = Number(text);
+      return isNaN(value) ? "Enter a number." : check(value);
+    }
+
+    function polygonError() {
+      var text = polygonField.value.trim();
+      if (text === "") return "";
+      var ring;
+      try {
+        ring = JSON.parse(text);
+      } catch (err) {
+        return "Must be a list of [lng, lat] points, e.g. [[185.6, -19.8], ...].";
+      }
+      if (!Array.isArray(ring)) return "Must be a list of [lng, lat] points.";
+      for (var i = 0; i < ring.length; i++) {
+        var p = ring[i];
+        if (!Array.isArray(p) || p.length !== 2 || isNaN(Number(p[0])) || isNaN(Number(p[1]))) {
+          return "Point " + (i + 1) + " is not a [lng, lat] pair.";
+        }
+        var message = lngError(Number(p[0])) || latError(Number(p[1]));
+        if (message) return "Point " + (i + 1) + ": " + message;
+      }
+      return "";
+    }
+
+    var liveErrors = {};
+
+    function showError(field, message) {
+      var list = liveErrors[field.id];
+      if (!message) {
+        if (list) list.remove();
+        delete liveErrors[field.id];
+        field.style.borderColor = "";
+        return;
+      }
+      if (!list) {
+        list = document.createElement("ul");
+        list.className = "errorlist";
+        field.parentNode.insertBefore(list, field);
+        liveErrors[field.id] = list;
+      }
+      list.innerHTML = "";
+      var item = document.createElement("li");
+      item.textContent = message;
+      list.appendChild(item);
+      field.style.borderColor = "var(--error-fg, #ba2121)";
+    }
+
+    // Returns true when every boundary field the current type uses is valid.
+    function validateBoundary() {
+      var type = typeField.value;
+      var checks = [
+        [westField, type !== "polygon" && numberError(westField, lngError)],
+        [southField, type !== "polygon" && numberError(southField, latError)],
+        [eastField, type === "zone" && numberError(eastField, lngError)],
+        [northField, type === "zone" && numberError(northField, latError)],
+      ];
+      if (polygonField) checks.push([polygonField, type === "polygon" && polygonError()]);
+      var valid = true;
+      checks.forEach(function (check) {
+        showError(check[0], check[1] || "");
+        if (check[1]) valid = false;
+      });
+      return valid;
+    }
+
+    [westField, eastField, southField, northField, polygonField].forEach(function (field) {
+      if (field) field.addEventListener("input", validateBoundary);
+    });
+    typeField.addEventListener("change", validateBoundary);
+    if (typeField.form) {
+      typeField.form.addEventListener("submit", function (e) {
+        if (!validateBoundary()) {
+          e.preventDefault();
+          typeRow.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+    }
+    validateBoundary();
+
     var mapRow = document.createElement("div");
     mapRow.className = "form-row";
     mapRow.innerHTML =
@@ -152,6 +254,7 @@
         southField.value = "";
         northField.value = "";
         if (polygonField) polygonField.value = "";
+        validateBoundary();
       });
 
       typeField.addEventListener("change", updateFieldVisibility);
@@ -173,31 +276,39 @@
       show(polygonRow, type === "polygon");
     }
 
+    // Longitudes are stored east-positive (the model rejects negatives), but Leaflet
+    // reports -180..180 or beyond depending on which world copy was drawn on.
+    function lng360(lng) {
+      return (((lng % 360) + 360) % 360).toFixed(5);
+    }
+
     function syncFieldsFromShape(layer) {
       if (typeField.value === "polygon") {
         var ring = layer.getLatLngs()[0].map(function (ll) {
-          return [+ll.lng.toFixed(5), +ll.lat.toFixed(5)];
+          return [+lng360(ll.lng), +ll.lat.toFixed(5)];
         });
         ring.push(ring[0]);
         if (polygonField) polygonField.value = JSON.stringify(ring);
         var pb = layer.getBounds();
-        westField.value = pb.getWest().toFixed(5);
-        eastField.value = pb.getEast().toFixed(5);
+        westField.value = lng360(pb.getWest());
+        eastField.value = lng360(pb.getEast());
         southField.value = pb.getSouth().toFixed(5);
         northField.value = pb.getNorth().toFixed(5);
       } else if (typeField.value === "point") {
         var latlng = layer.getLatLng ? layer.getLatLng() : layer.getBounds().getCenter();
-        westField.value = latlng.lng.toFixed(5);
+        westField.value = lng360(latlng.lng);
         southField.value = latlng.lat.toFixed(5);
         eastField.value = "";
         northField.value = "";
       } else {
         var bounds = layer.getBounds();
-        westField.value = bounds.getWest().toFixed(5);
-        eastField.value = bounds.getEast().toFixed(5);
+        westField.value = lng360(bounds.getWest());
+        eastField.value = lng360(bounds.getEast());
         southField.value = bounds.getSouth().toFixed(5);
         northField.value = bounds.getNorth().toFixed(5);
       }
+      // Setting .value doesn't fire "input", so re-check explicitly.
+      validateBoundary();
     }
 
     function restoreExisting() {
