@@ -1,5 +1,7 @@
 const basePath = (import.meta.env.VITE_BASE_PATH || '/').replace(/\/$/, '') + '/'
 const apiDefault = (import.meta.env.VITE_API_BASE_URL || `${basePath}api`);
+// Django admin - served beside the SPA in prod (FORCE_SCRIPT_NAME=/dms -> /dms/admin/)
+const adminDefault = (import.meta.env.VITE_ADMIN_URL || `${basePath}admin/`);
 
 
 
@@ -47,3 +49,6 @@ export const getApiBaseURL = () => {
 
 // Helper: base path for client-side redirects
 export const getBasePath = () => basePath
+
+// Helper: Django admin login page (the backend for managing records)
+export const getAdminURL = () => adminDefault

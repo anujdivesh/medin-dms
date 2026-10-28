@@ -74,7 +74,8 @@ class ElasticsearchService {
         version: properties.version || 'Unknown',
       
         metadataType: hit._index || properties.metadata_type_value,
-        // Bounding coordinates for map thumbnail
+        // GeoJSON Point/Polygon from the backend - drawn on maps exactly as given
+        geometry: source.geometry || null,
         west_bounding_longitude: properties.west_bounding_longitude,
         east_bounding_longitude: properties.east_bounding_longitude,
         south_bounding_latitude: properties.south_bounding_latitude,

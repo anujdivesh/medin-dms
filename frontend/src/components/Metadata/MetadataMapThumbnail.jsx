@@ -1,4 +1,7 @@
 import React, { useEffect, useRef } from 'react'
+import { RESULT_STYLE, POINT_ICON } from '@/components/ui/map-styles'
+
+const POINT_ZOOM = 8
 
 const MetadataMapThumbnail = ({ metadata }) => {
     const mapRef = useRef(null)
@@ -45,58 +48,21 @@ const MetadataMapThumbnail = ({ metadata }) => {
                         attribution: '© OpenStreetMap'
                     }).addTo(map)
 
-                    if (metadata &&
-                        metadata.west_bounding_longitude !== null &&
-                        metadata.east_bounding_longitude !== null &&
-                        metadata.south_bounding_latitude !== null &&
-                        metadata.north_bounding_latitude !== null &&
-                        !isNaN(metadata.west_bounding_longitude) &&
-                        !isNaN(metadata.east_bounding_longitude) &&
-                        !isNaN(metadata.south_bounding_latitude) &&
-                        !isNaN(metadata.north_bounding_latitude)) {
-
-                        const bounds = [
-                            [metadata.south_bounding_latitude, metadata.west_bounding_longitude],
-                            [metadata.north_bounding_latitude, metadata.east_bounding_longitude]
-                        ]
-
-                        // Draw bounding box
-                        L.rectangle(bounds, {
-                            color: '#3b82f6',
-                            weight: 2,
-                            fillColor: '#3b82f6',
-                            fillOpacity: 0.1
+                    if (metadata?.geometry) {
+                        // Drawn exactly as the backend's GeoJSON says (0-360
+                        // longitudes, which Leaflet places correctly as-is).
+                        const layer = L.geoJSON(metadata.geometry, {
+                            style: () => ({ ...RESULT_STYLE, fillOpacity: 0.1 }),
+                            pointToLayer: (feature, latlng) => L.marker(latlng, { icon: L.divIcon(POINT_ICON) })
                         }).addTo(map)
 
-                        // Add corner markers
-                        // const cornerColors = {
-                        //   'NW': 'bg-blue-500',
-                        //   'NE': 'bg-green-500',
-                        //   'SE': 'bg-purple-600',
-                        //   'SW': 'bg-orange-500'
-                        // }
-
-                        // const corners = [
-                        //   { lat: metadata.north_bounding_latitude, lng: metadata.west_bounding_longitude, label: 'NW' },
-                        //   { lat: metadata.north_bounding_latitude, lng: metadata.east_bounding_longitude, label: 'NE' },
-                        //   { lat: metadata.south_bounding_latitude, lng: metadata.east_bounding_longitude, label: 'SE' },
-                        //   { lat: metadata.south_bounding_latitude, lng: metadata.west_bounding_longitude, label: 'SW' }
-                        // ]
-
-                        // corners.forEach(corner => {
-                        //   const colorClass = cornerColors[corner.label] || 'bg-gray-500'
-                        //   L.marker([corner.lat, corner.lng], {
-                        //     icon: L.divIcon({
-                        //       className: 'corner-marker',
-                        //       html: `<div class="${colorClass} text-white text-[10px] px-1 rounded font-bold shadow-sm">${corner.label}</div>`,
-                        //       iconSize: [24, 16],
-                        //       iconAnchor: [12, 8]
-                        //     })
-                        //   }).addTo(map)
-                        // })
-
-
-                        map.fitBounds(bounds, { padding: [10, 10] })
+                        if (metadata.geometry.type === 'Point') {
+                            // A point has no extent to fit - fitBounds would zoom to street level.
+                            const [lng, lat] = metadata.geometry.coordinates
+                            map.setView([lat, lng], POINT_ZOOM)
+                        } else {
+                            map.fitBounds(layer.getBounds(), { padding: [10, 10] })
+                        }
                     }
                 }
             } catch (error) {
@@ -114,17 +80,7 @@ const MetadataMapThumbnail = ({ metadata }) => {
         }
     }, [metadata])
 
-    const hasValidCoordinates = metadata &&
-        metadata.west_bounding_longitude !== null &&
-        metadata.east_bounding_longitude !== null &&
-        metadata.south_bounding_latitude !== null &&
-        metadata.north_bounding_latitude !== null &&
-        !isNaN(metadata.west_bounding_longitude) &&
-        !isNaN(metadata.east_bounding_longitude) &&
-        !isNaN(metadata.south_bounding_latitude) &&
-        !isNaN(metadata.north_bounding_latitude)
-
-    if (!hasValidCoordinates) return null
+    if (!metadata?.geometry) return null
 
     return (
         <div

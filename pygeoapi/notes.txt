@@ -21,8 +21,8 @@ access db ; docker-compose exec dms-database psql -U dms_user -d dms
 or
 psql -h localhost -p 5433 -U dms_user -d dms
 
-copy   file;  docker cp C:\Code\dms\database\dump-dms.sql dms-database:/docker-entrypoint-initdb.d/dump-dms.sql
-docker cp /home/divesha/kunal/dms/dms/dump-dms.sql dms-database:/docker-entrypoint-initdb.d/dump-dms.sql
+copy   file;  docker cp C:\Code\new_new_dms\database\dump-dms.sql dms-database:/docker-entrypoint-initdb.d/dump-dms.sql
+docker cp /home/divesha/kunal/new_new_dms/dms/dump-dms.sql dms-database:/docker-entrypoint-initdb.d/dump-dms.sql
 Load data ; docker-compose exec -T database psql -U dms_user -d dms -f /docker-entrypoint-initdb.d/dump-dms.sql
 
 
@@ -49,7 +49,7 @@ docker exec -it dms-pygeoapi tail -f /app/logs/pygeoapi.log
 ###temp add my git to OPM DATA
 alias ll='ls -ltr'
 alias nginxf='cd /etc/nginx/conf.d'
-alias dmsf='cd /home/divesha/kunal/dms/dms'
+alias dmsf='cd /home/divesha/kunal/new_new_dms/dms'
 eval "$(ssh-agent -s)"
 ssh-add /home/divesha/kunal/.ssh/id_ed25519
 ssh-add
@@ -81,18 +81,23 @@ mv .env.local.backup .env.local
 
 # backup from db to local 
 docker exec -t dms-database pg_dump -U dms_user -d dms > dms_backup_24032026245pmsql
-------------
+------------------------------------------------------------
+get prod db backup 
+ docker exec dms-database pg_dump -U dms_user -d new_dms -Fc --no-owner --no-privileges -f /tmp/new_dms_prod.dump
+docker cp dms-database:/tmp/new_dms_prod.dump ./new_dms_prod.dump
+--and then chown to user and transfer out
 
+------------------------------------------------------------
 
 ==23/01/2026==
 commented out rquested data in 
-C:\Code\dms\frontend\src\components\RequestDataButton.jsx
-C:\Code\dms\frontend\src\components\Layout.jsx
-C:\Code\dms\frontend\src\components\QuickSearch.jsx
+C:\Code\new_new_dms\frontend\src\components\RequestDataButton.jsx
+C:\Code\new_new_dms\frontend\src\components\Layout.jsx
+C:\Code\new_new_dms\frontend\src\components\QuickSearch.jsx
 
 commented out echo depth in 
-C:\Code\dms\frontend\src\components\EchoDepthFloating.jsx
-C:\Code\dms\frontend\src\components\Layout.jsx
+C:\Code\new_new_dms\frontend\src\components\EchoDepthFloating.jsx
+C:\Code\new_new_dms\frontend\src\components\Layout.jsx
 
 
 
@@ -124,17 +129,17 @@ sudo ssh -T git@github.com
 
 ===local commands===
 
-cd C:\Code\dms\elasticsearch; docker-compose -f docker-compose-local.yml up
+cd C:\Code\new_new_dms\elasticsearch; docker-compose -f docker-compose-local.yml up
 
 wsl -d Ubuntu
-cd /mnt/c/Code/dms/pygeoapi; source .venv/bin/activate; python main.py
+cd /mnt/c/Code/new_new_dms/pygeoapi; source .venv/bin/activate; python main.py
 
-cd C:\Code\dms\frontend;npm run dev
+cd C:\Code\new_new_dms\frontend;npm run dev
 vite.config.js & C:\Code\dms
 frontend\src\configpiEndpoints.js
 
 wsl -d Ubuntu
-cd /mnt/c/Code/dms/backend; source .venv/bin/activate;  python manage.py runserver 0.0.0.0:8000
+cd /mnt/c/Code/new_new_dms/backend; source .venv/bin/activate;  python manage.py runserver 0.0.0.0:8000
 ===\\local commands===
 
 
