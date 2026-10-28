@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { Loader2, X, MapPin, HelpCircle, PenTool } from 'lucide-react'
-import { elasticsearchService } from '@/lib/elasticsearchService'
+import { elasticsearchService, SORT_OPTIONS } from '@/lib/elasticsearchService'
 
 import MapComponent from '@/components/ui/map-component'
 import { apiService } from '@/lib/apiClient'
@@ -168,6 +168,7 @@ function HomeSearchMetaData() {
   const [selectedItems, setSelectedItems] = useState([]) // [{id, title}]
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(100)
+  const [sortBy, setSortBy] = useState('default') // key of SORT_OPTIONS
   const [activeEllipsis, setActiveEllipsis] = useState(null) // {pos: 'top'|'bottom', idx}
   const [ellipsisValue, setEllipsisValue] = useState('')
   const [ellipsisInvalid, setEllipsisInvalid] = useState(false)
@@ -276,6 +277,13 @@ function HomeSearchMetaData() {
     setPageSize(newSize)
     setPage(0)
     await fetchPage(0, newSize)
+  }
+
+  const handleSortChange = async (newSort) => {
+    // re-sorting changes what's on every page, so start again from the first
+    setSortBy(newSort)
+    setPage(0)
+    await fetchPage(0, undefined, newSort)
   }
 
   // compute page numbers to show in pagination (with ellipsis)
@@ -591,8 +599,8 @@ function HomeSearchMetaData() {
   }
 
   // Fetch a specific page of results (0-indexed).
-  // Pass customPageSize when calling immediately after setPageSize (state may not have updated yet).
-  const fetchPage = async (newPage, customPageSize) => {
+  // Pass customPageSize / customSort when calling immediately after setPageSize / setSortBy (state may not have updated yet).
+  const fetchPage = async (newPage, customPageSize, customSort) => {
     const effectivePageSize = customPageSize ?? pageSize
     setLoading(true)
     setError(null)
@@ -601,7 +609,7 @@ function HomeSearchMetaData() {
       delete base.page
       delete base.size
 
-      const sf = { ...base, page: newPage, size: effectivePageSize }
+      const sf = { ...base, page: newPage, size: effectivePageSize, sort: customSort ?? sortBy }
       const r = await elasticsearchService.searchMetadataWithFilters(sf)
       setResults(r.data || [])
       setTotalResults(r.total || 0)
@@ -965,6 +973,14 @@ function HomeSearchMetaData() {
                       Show All
                     </Button>
                   )}
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm">Sort by:</label>
+                    <select value={sortBy} onChange={(e) => handleSortChange(e.target.value)} className="text-sm border border-border rounded px-2 py-1 bg-card text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+                      {Object.entries(SORT_OPTIONS).map(([key, { label }]) => (
+                        <option key={key} value={key}>{label}</option>
+                      ))}
+                    </select>
+                  </div>
                   <div className="flex items-center gap-2">
                     <label className="text-sm">Per page:</label>
                     <select value={pageSize} onChange={(e) => handlePageSizeChange(parseInt(e.target.value, 10))} className="text-sm border border-border rounded px-2 py-1 bg-card text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
