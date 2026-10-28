@@ -259,7 +259,25 @@
 
       typeField.addEventListener("change", updateFieldVisibility);
       updateFieldVisibility();
-      restoreExisting();
+      drawFromFields();
+
+      // Redraw as the fields are edited by hand, once typing pauses; a value
+      // that fails the live checks clears the shape rather than drawing it.
+      var redrawTimer;
+      function scheduleRedraw() {
+        clearTimeout(redrawTimer);
+        redrawTimer = setTimeout(function () {
+          if (validateBoundary()) {
+            drawFromFields();
+          } else {
+            drawnItems.clearLayers();
+          }
+        }, 400);
+      }
+      [westField, eastField, southField, northField, polygonField].forEach(function (field) {
+        if (field) field.addEventListener("input", scheduleRedraw);
+      });
+      typeField.addEventListener("change", scheduleRedraw);
     }
 
     function updateFieldVisibility() {
@@ -311,7 +329,9 @@
       validateBoundary();
     }
 
-    function restoreExisting() {
+    // Draws the shape the fields currently describe (if complete) and zooms to it.
+    function drawFromFields() {
+      drawnItems.clearLayers();
       if (typeField.value === "polygon") {
         var ring;
         try {
