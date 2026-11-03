@@ -221,6 +221,27 @@ class AccessConstraints(models.TextChoices):
     OPEN = "open", "Open"
 
 
+# Link/upload sources a record hides while private unless unticked - pointers
+# to the data itself rather than descriptions of it.
+LINK_AND_FILE_SOURCES = [
+    "link_to_data",
+    "link_to_data_url",
+    "acquisition_report_file",
+    "acquisition_report_url",
+    "additional_information",
+    "additional_information_file",
+    "additional_information_value",
+    "project_report_link",
+    "project_report_url",
+    "file",
+    "file_url",
+]
+
+
+def default_hidden_when_private():
+    return list(LINK_AND_FILE_SOURCES)
+
+
 # Upper bound for a record's own longitudes (lower bound is 0) - see
 # MetadataRecord.clean_coordinate_ranges. Mirrored in boundary_map.js.
 MAX_LONGITUDE = 300
@@ -307,7 +328,15 @@ class CoreMetadata(models.Model):
         choices=AccessConstraints.choices,
         default=AccessConstraints.PRIVATE,
     )
-    license = models.CharField(max_length=255, default="Other (Not Open)")
+    # Elasticsearch field sources (same paths as ElasticsearchFieldMap.source)
+    # to withhold from this record's search-index document while it's private.
+    hidden_when_private = models.JSONField(
+        default=default_hidden_when_private,
+        blank=True,
+        help_text="Fields left out of the search index (pygeoapi) while this "
+        "record's access constraint is private.",
+    )
+    license =models.CharField(max_length=255, default="Other (Not Open)")
     temporal_coverage_from = models.DateField(null=True, blank=True)
     temporal_coverage_to = models.DateField(
         null=True, blank=True, help_text="Leave empty if coverage is ongoing"
@@ -808,8 +837,8 @@ class ElasticsearchIndex(TimeStampedModel):
         return f"{self.name} -> {self.index_name}"
 
     def records(self):
-        """The records this index covers - every record of this type,
-        regardless of status."""
+        """Every record of this type, regardless of status - re-syncing them
+        indexes the published ones and removes drafts/archived ones."""
         return MetadataRecord.objects.filter(metadata_type=self.metadata_type)
 
     def build_document(self, record):
@@ -831,8 +860,12 @@ class ElasticsearchIndex(TimeStampedModel):
         """
         geometry = record.geojson_geometry
 
+        is_open = record.access_constraints == AccessConstraints.OPEN
+        hidden = set() if is_open else set(record.hidden_when_private or [])
         properties = {}
         for field in self.fields.filter(is_enabled=True).order_by("order", "id"):
+            if field.source in hidden:
+                continue
             value = resolve_source(record, field.source)
             if isinstance(value, list) and all(isinstance(v, str) for v in value):
                 # A many-to-many fan-out (e.g. keywords) resolves to a list of
@@ -859,7 +892,7 @@ class ElasticsearchIndex(TimeStampedModel):
         # link_to_data_url is blank when the raw value isn't actually a URL
         # (e.g. an internal "S:/GEM/..." file-share path).
         links = []
-        if record.link_to_data_url and record.access_constraints == AccessConstraints.OPEN:
+        if record.link_to_data_url and is_open:
             links.append({"href": record.link_to_data_url, "rel": "item"})
 
 #        doc_id = str(record.legacy_id if record.legacy_id is not None else record.pk)
