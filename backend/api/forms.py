@@ -33,6 +33,7 @@ CORE_FIELDS = [
     "data_type",
     "project",
     "access_constraints",
+    "hidden_when_private",
     "license",
     "temporal_coverage_from",
     "temporal_coverage_to",
@@ -147,6 +148,16 @@ class MetadataRecordAdminForm(forms.ModelForm):
     def clean(self):
         cleaned = super().clean()
         existing = self.instance.data or {}  # capture before we rebuild it
+
+        # Greyed-out (disabled) picks aren't submitted by the browser - keep
+        # the saved ones so they still apply if that field is mapped later.
+        hidden_field = self.fields.get("hidden_when_private")
+        if hidden_field is not None and "hidden_when_private" in cleaned:
+            disabled = getattr(hidden_field.widget, "disabled_values", set())
+            kept = [v for v in (self.instance.hidden_when_private or []) if v in disabled]
+            cleaned["hidden_when_private"] = list(
+                dict.fromkeys(list(cleaned["hidden_when_private"]) + kept)
+            )
 
         # Collect every dynamic field back into the JSON `data` dict. The typed
         # form fields (required/choices/types) already validated each value, so

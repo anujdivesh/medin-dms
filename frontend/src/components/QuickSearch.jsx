@@ -16,7 +16,7 @@ function QuickSearch({ open, onOpenChange }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [highlightIndex, setHighlightIndex] = useState(-1)
-  const [mode, setMode] = useState('routes') // 'routes' | 'metadata'
+  const [mode, setMode] = useState('metadata') // 'routes' | 'metadata'
   const [metadataSuggestions, setMetadataSuggestions] = useState([])
   const [metadataLoading, setMetadataLoading] = useState(false)
   const inputRef = useRef(null)
@@ -28,6 +28,7 @@ function QuickSearch({ open, onOpenChange }) {
       setTimeout(() => inputRef.current?.focus(), 50)
     } else {
       setQuery('')
+      setMode('metadata')
     }
     // reset highlight when opening/closing
     setHighlightIndex(-1)

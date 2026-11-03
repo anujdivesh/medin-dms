@@ -16,7 +16,7 @@ import logging
 
 from django.conf import settings
 
-from .models import ElasticsearchIndex
+from .models import ElasticsearchIndex, MetadataRecord
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +78,9 @@ def _delete_from(index, doc_id):
 
 
 def sync_record(record):
-    """Index (or re-index) `record` in its type's ES index, if an active
-    index is configured for that type; otherwise remove it. Every record is
-    sent regardless of status - there's no published-only gate.
+    """Index (or re-index) `record` in its type's ES index, if it's published
+    and an active index is configured for that type; otherwise remove it -
+    drafts (and archived records) never appear in the index/pygeoapi.
 
     Also cleans up any *other* index that might hold a stale copy - e.g. if
     a record's metadata_type is reassigned after it was already indexed
@@ -92,7 +92,11 @@ def sync_record(record):
     for index in ElasticsearchIndex.objects.exclude(pk=getattr(current_index, "pk", None)):
         _delete_from(index, doc_id)
 
-    should_index = current_index is not None and current_index.is_active
+    should_index = (
+        current_index is not None
+        and current_index.is_active
+        and record.status == MetadataRecord.Status.PUBLISHED
+    )
     if not should_index:
         if current_index is not None:
             _delete_from(current_index, doc_id)

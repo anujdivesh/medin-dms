@@ -85,7 +85,9 @@ const MetadataMapThumbnail = ({ metadata }) => {
     return (
         <div
             ref={mapRef}
-            className="w-full h-full rounded-md border bg-muted/20"
+            // isolate: contain Leaflet's pane z-indexes (400+) so the
+            // thumbnail can't paint over dialogs (z-50) like QuickSearch
+            className="isolate w-full h-full rounded-md border bg-muted/20"
             style={{ minHeight: '120px' }}
         />
     )
