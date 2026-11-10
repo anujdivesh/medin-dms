@@ -8,6 +8,7 @@ from django.urls import reverse
 from django.utils.html import format_html
 
 from .elasticsearch_sync import resync_records_for
+from .pygeoapi_sync import item_url
 from .forms import (
     CORE_FIELDS,
     DYNAMIC_PREFIX,
@@ -333,12 +334,15 @@ class MetadataTemplateAdmin(admin.ModelAdmin):
 @admin.register(MetadataRecord)
 class MetadataRecordAdmin(admin.ModelAdmin):
     form = MetadataRecordAdminForm
-    list_display = ["title", "status_badge", "metadata_type", "template", "country", "publisher", "updated_at"]
+    list_display = ["title", "status_badge", "metadata_type", "template", "country", "publisher", "updated_at", "pygeoapi_list_link"]
     list_filter = ["status", "metadata_type", "template", "access_constraints", "country", "topic"]
     search_fields = ["title", "data__abstract"]
     # metadata_date is system-filled on every save (auto_now) - shown as
     # yyyy-mm-dd via metadata_date_display (see get_fieldsets).
-    readonly_fields = ["status_badge", "created_at", "updated_at", "metadata_date_display"]
+    readonly_fields = [
+        "status_badge", "pygeoapi_link", "pygeoapi_list_link",
+        "created_at", "updated_at", "metadata_date_display",
+    ]
     autocomplete_fields = [
         "contact",
         "country",
@@ -540,6 +544,26 @@ class MetadataRecordAdmin(admin.ModelAdmin):
             obj.get_status_display(),
         )
 
+    @admin.display(description="pygeoapi")
+    def pygeoapi_link(self, obj):
+        url = item_url(obj)
+        if url is None:
+            if obj is not None and obj.status != MetadataRecord.Status.PUBLISHED:
+                return "Not in pygeoapi until published"
+            return "-"
+        return format_html(
+            '<a href="{}" target="_blank" rel="noopener" class="button" '
+            'style="padding:4px 10px">View in pygeoapi ↗</a>',
+            url,
+        )
+
+    @admin.display(description="pygeoapi")
+    def pygeoapi_list_link(self, obj):
+        url = item_url(obj)
+        if url is None:
+            return "-"
+        return format_html('<a href="{}" target="_blank" rel="noopener">View ↗</a>', url)
+
     @admin.display(description="Metadata date")
     def metadata_date_display(self, obj):
         if obj is None or obj.metadata_date is None:
@@ -553,7 +577,7 @@ class MetadataRecordAdmin(admin.ModelAdmin):
         built-in field in its default section."""
         template = self._template_for(request, obj)
         top = (None, {
-            "fields": (["status_badge"] if obj else []) + ["template", "metadata_type"]
+            "fields": (["status_badge", "pygeoapi_link"] if obj else []) + ["template", "metadata_type"]
         })
         rows = template_builtin_rows(None) if template is None else template.fields.all()
         by_section = {}

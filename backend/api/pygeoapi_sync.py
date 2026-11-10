@@ -40,6 +40,46 @@ def _resource_key(index):
     return slugify(index.metadata_type.metadata_type_value) or slugify(index.name)
 
 
+_public_url_cache = {}
+
+
+def public_url():
+    """pygeoapi's public address: PYGEOAPI_PUBLIC_URL if set, else
+    `server.url` from the active pygeoapi-config.yml (re-read only when the
+    file changes). "" when neither is available."""
+    override = getattr(settings, "PYGEOAPI_PUBLIC_URL", "") or ""
+    if override:
+        return override.rstrip("/")
+    path = settings.PYGEOAPI_DIR / "pygeoapi-generate-config" / "pygeoapi-config.yml"
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return ""
+    if _public_url_cache.get("mtime") != mtime:
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                url = ((YAML(typ="safe").load(fh) or {}).get("server") or {}).get("url") or ""
+        except Exception:
+            logger.exception("Couldn't read server.url from %s", path)
+            url = ""
+        _public_url_cache.update(mtime=mtime, url=str(url).rstrip("/"))
+    return _public_url_cache["url"]
+
+
+def item_url(record):
+    """The record's pygeoapi item page, or None when pygeoapi doesn't show
+    it (draft/archived, or no active index for its metadata type)."""
+    from .models import MetadataRecord
+
+    if record is None or record.pk is None or record.status != MetadataRecord.Status.PUBLISHED:
+        return None
+    index = getattr(record.metadata_type, "elasticsearch_index", None) if record.metadata_type_id else None
+    base = public_url()
+    if index is None or not index.is_active or not base:
+        return None
+    return f"{base}/collections/{_resource_key(index)}/items/{record.pk}?f=html"
+
+
 def _es_base(host, port, scheme="http"):
     username = getattr(settings, "ELASTICSEARCH_USERNAME", "") or ""
     password = getattr(settings, "ELASTICSEARCH_PASSWORD", "") or ""
