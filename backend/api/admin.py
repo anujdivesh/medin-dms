@@ -46,43 +46,19 @@ from .models import (
 @admin.action(description="Resync selected indexes to Elasticsearch")
 def resync_all_to_elasticsearch(modeladmin, request, queryset):
     """Rebuild only the selected index(es), not every index - never touches
-    indexes the admin didn't select."""
-    total = 0
+    indexes the admin didn't select. First adds any Dataset Metadata
+    Template field the index doesn't send yet and sorts its fields in
+    document order (ElasticsearchIndex.add_document_fields)."""
+    total = added = 0
     for index in queryset:
+        added += index.add_document_fields()
         records = MetadataRecord.objects.filter(metadata_type=index.metadata_type)
         resync_records_for(records)
         total += records.count()
-    modeladmin.message_user(
-        request,
-        f"Resynced {total} record(s) across {queryset.count()} index(es).",
-        messages.SUCCESS,
-    )
-
-
-@admin.action(description="Sort fields in document order")
-def sort_fields_by_document(modeladmin, request, queryset):
-    """Renumber each selected index's fields in Dataset Metadata Template
-    order - the order pygeoapi lists them in."""
-    for index in queryset:
-        index.sort_fields_by_document()
-    modeladmin.message_user(
-        request,
-        f"Sorted the fields of {queryset.count()} index(es) in document order.",
-        messages.SUCCESS,
-    )
-
-
-@admin.action(description="Add all document fields (and sort)")
-def add_document_fields(modeladmin, request, queryset):
-    """Add field maps for every Dataset Metadata Template field each
-    selected index doesn't send yet, then sort them in document order."""
-    added = sum(index.add_document_fields() for index in queryset)
-    modeladmin.message_user(
-        request,
-        f"Added {added} field(s) across {queryset.count()} index(es). Resync "
-        "them to Elasticsearch for pygeoapi to show the new fields.",
-        messages.SUCCESS,
-    )
+    message = f"Resynced {total} record(s) across {queryset.count()} index(es)."
+    if added:
+        message += f" Added {added} missing document field(s)."
+    modeladmin.message_user(request, message, messages.SUCCESS)
 
 
 @admin.register(Project)
@@ -222,7 +198,7 @@ class ElasticsearchIndexAdmin(admin.ModelAdmin):
     list_filter = ["is_active", "metadata_type"]
     search_fields = ["name", "index_name"]
     inlines = [ElasticsearchFieldMapInline]
-    actions = [resync_all_to_elasticsearch, add_document_fields, sort_fields_by_document]
+    actions = [resync_all_to_elasticsearch]
 
 
 class FieldDefinitionForm(forms.ModelForm):
