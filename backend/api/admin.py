@@ -59,6 +59,32 @@ def resync_all_to_elasticsearch(modeladmin, request, queryset):
     )
 
 
+@admin.action(description="Sort fields in document order")
+def sort_fields_by_document(modeladmin, request, queryset):
+    """Renumber each selected index's fields in Dataset Metadata Template
+    order - the order pygeoapi lists them in."""
+    for index in queryset:
+        index.sort_fields_by_document()
+    modeladmin.message_user(
+        request,
+        f"Sorted the fields of {queryset.count()} index(es) in document order.",
+        messages.SUCCESS,
+    )
+
+
+@admin.action(description="Add all document fields (and sort)")
+def add_document_fields(modeladmin, request, queryset):
+    """Add field maps for every Dataset Metadata Template field each
+    selected index doesn't send yet, then sort them in document order."""
+    added = sum(index.add_document_fields() for index in queryset)
+    modeladmin.message_user(
+        request,
+        f"Added {added} field(s) across {queryset.count()} index(es). Resync "
+        "them to Elasticsearch for pygeoapi to show the new fields.",
+        messages.SUCCESS,
+    )
+
+
 @admin.register(Project)
 class ProjectAdmin(admin.ModelAdmin):
     list_display = ["project_name", "project_code"]
@@ -196,7 +222,7 @@ class ElasticsearchIndexAdmin(admin.ModelAdmin):
     list_filter = ["is_active", "metadata_type"]
     search_fields = ["name", "index_name"]
     inlines = [ElasticsearchFieldMapInline]
-    actions = [resync_all_to_elasticsearch]
+    actions = [resync_all_to_elasticsearch, add_document_fields, sort_fields_by_document]
 
 
 class FieldDefinitionForm(forms.ModelForm):
