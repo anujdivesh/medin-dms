@@ -2,6 +2,8 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from .models import (
+    template_value,
+    utc_timestamp,
     BoundaryType,
     Contact,
     CoordinateReferenceSystem,
@@ -19,7 +21,8 @@ from .models import (
     Topic,
     AUTO_BUILTIN_MEMBERS,
     BUILTIN_FIELD_MEMBERS,
-    default_field_definitions,
+    DEFAULT_FIELD_NAMES,
+    ensure_default_fields,
     template_builtin_rows,
     validate_record_data,
 )
@@ -178,7 +181,9 @@ class MetadataTemplateSerializer(serializers.ModelSerializer):
         read_only_fields = ["slug", "created_at", "updated_at"]
 
     def validate_fields(self, fields_data):
-        """Same built-in row naming rules as FieldDefinition.clean()."""
+        """The template's own extra fields. Default fields sent back (e.g. a
+        GET then PUT) are ignored - they're fixed and always present."""
+        fields_data = [f for f in fields_data if f.get("name") not in DEFAULT_FIELD_NAMES]
         errors = {}
         for f in fields_data:
             try:
@@ -195,15 +200,8 @@ class MetadataTemplateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         fields_data = validated_data.pop("fields", [])
         template = MetadataTemplate.objects.create(**validated_data)
-        rows = self._field_rows(template, fields_data)
-        # Every new template lists the built-in and standard fields; the
-        # given ones win.
-        given = {row.name for row in rows}
-        rows += [
-            row for row in default_field_definitions(template)
-            if row.name not in given
-        ]
-        FieldDefinition.objects.bulk_create(rows)
+        FieldDefinition.objects.bulk_create(self._field_rows(template, fields_data))
+        ensure_default_fields(template)  # every template has the defaults
         return template
 
     def update(self, instance, validated_data):
@@ -212,10 +210,12 @@ class MetadataTemplateSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         instance.save()
 
-        # Replace the field set wholesale when provided.
+        # Replace the template's own fields wholesale when provided; the
+        # default fields stay as they are.
         if fields_data is not None:
-            instance.fields.all().delete()
+            instance.fields.exclude(name__in=DEFAULT_FIELD_NAMES).delete()
             FieldDefinition.objects.bulk_create(self._field_rows(instance, fields_data))
+        ensure_default_fields(instance)
         return instance
 
 
@@ -337,6 +337,21 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def to_representation(self, instance):
+        """Date / Date & time template fields in `data` out in the UTC
+        format too, like every other date."""
+        out = super().to_representation(instance)
+        if isinstance(out.get("data"), dict):
+            out["data"] = {
+                name: (
+                    utc_timestamp(v)
+                    if hasattr(v := template_value(instance, name, value), "isoformat")
+                    else value
+                )
+                for name, value in out["data"].items()
+            }
+        return out
 
     def validate(self, attrs):
         """Validate `data` against the (possibly new) template's fields, and the

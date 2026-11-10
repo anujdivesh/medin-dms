@@ -39,7 +39,10 @@ from .models import (
     RECORD_SOURCE_CHOICES,
     SpatialRepresentationType,
     Topic,
-    default_field_definitions,
+    DEFAULT_FIELD_NAMES,
+    OPTIONAL_BUILTIN_FIELDS,
+    utc_timestamp,
+    ensure_default_fields,
     template_builtin_rows,
 )
 
@@ -228,12 +231,13 @@ class FieldDefinitionForm(forms.ModelForm):
         default = self.initial.get("default")
         if default is not None and not isinstance(default, str):
             self.initial["default"] = json.dumps(default)
-        # Read by builtin_field_picker.js to offer the built-in fields as a
-        # dropdown in place of the Name box (and preset their section).
+        # Read by builtin_field_picker.js to offer the optional built-in
+        # fields (the rest are default fields) as a dropdown in place of the
+        # Name box, and preset their section.
         section_ids = dict(FormSection.objects.values_list("slug", "pk"))
         self.fields["field_type"].widget.attrs["data-builtins"] = json.dumps([
             [name, label, section_ids.get(BUILTIN_FIELD_SECTIONS[name], "")]
-            for name, label, _ in BUILTIN_FIELDS
+            for name, label, _ in OPTIONAL_BUILTIN_FIELDS
         ])
 
     def clean_choices(self):
@@ -258,49 +262,27 @@ class FieldDefinitionForm(forms.ModelForm):
             self.add_error("default", "Must be one of the choices.")
         return cleaned
 
-    def has_changed(self):
-        # The rows pre-filled on a new template save even untouched.
-        return super().has_changed() or (
-            self.instance.pk is None and bool(self.initial.get("name"))
-        )
-
-
-class FieldDefinitionFormSet(forms.BaseInlineFormSet):
-    def __init__(self, *args, **kwargs):
-        instance = kwargs.get("instance")
-        if instance is None or instance.pk is None:
-            # New template: start from every built-in and standard field, in
-            # document order.
-            kwargs["initial"] = [
-                {
-                    "name": row.name,
-                    "label": row.label,
-                    "help_text": row.help_text,
-                    "field_type": row.field_type,
-                    "required": row.required,
-                    "choices": row.choices,
-                    "default": row.default,
-                    "section": row.section_id,
-                    "order": row.order,
-                }
-                for row in default_field_definitions(None)
-            ]
-        super().__init__(*args, **kwargs)
 
 
 class FieldDefinitionInline(admin.TabularInline):
-    """A template's fields: its "Built-in field" rows stand for the record's
-    own columns (only label/help text/required/order apply; delete one to
-    hide it), the rest - the standard MEDIN ones included - are ordinary
-    fields stored in the record's `data`."""
+    """A template's own extra fields (stored in the record's `data`). The
+    default fields - sections Identification to Metadata record - are fixed:
+    every template has them (ensure_default_fields) and they aren't listed
+    here, so they can't be edited or removed."""
 
     model = FieldDefinition
     form = FieldDefinitionForm
-    formset = FieldDefinitionFormSet
     ordering = ["order", "id"]
+    verbose_name = "template field"
+    verbose_name_plural = (
+        "Template fields (the default fields are always included and can't be edited here)"
+    )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).exclude(name__in=DEFAULT_FIELD_NAMES)
 
     def get_extra(self, request, obj=None, **kwargs):
-        return 1 if obj is not None else len(default_field_definitions(None)) + 1
+        return 1 if obj is not None else 3
 
 
 @admin.register(FormSection)
@@ -330,6 +312,10 @@ class MetadataTemplateAdmin(admin.ModelAdmin):
         # Name becomes a built-in field dropdown when the type is "Built-in".
         js = ("api/builtin_field_picker.js",)
 
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        ensure_default_fields(form.instance)  # every template has them
+
 
 @admin.register(MetadataRecord)
 class MetadataRecordAdmin(admin.ModelAdmin):
@@ -337,8 +323,8 @@ class MetadataRecordAdmin(admin.ModelAdmin):
     list_display = ["title", "status_badge", "metadata_type", "template", "country", "publisher", "updated_at", "pygeoapi_list_link"]
     list_filter = ["status", "metadata_type", "template", "access_constraints", "country", "topic"]
     search_fields = ["title", "data__abstract"]
-    # metadata_date is system-filled on every save (auto_now) - shown as
-    # yyyy-mm-dd via metadata_date_display (see get_fieldsets).
+    # metadata_date is system-filled on every save (auto_now) - shown in UTC
+    # via metadata_date_display (see get_fieldsets).
     readonly_fields = [
         "status_badge", "pygeoapi_link", "pygeoapi_list_link",
         "created_at", "updated_at", "metadata_date_display",
@@ -567,8 +553,8 @@ class MetadataRecordAdmin(admin.ModelAdmin):
     @admin.display(description="Metadata date")
     def metadata_date_display(self, obj):
         if obj is None or obj.metadata_date is None:
-            return "Filled in with today's date when saved (yyyy-mm-dd)"
-        return obj.metadata_date.isoformat()
+            return "Filled in with the current date and time (UTC) when saved"
+        return utc_timestamp(obj.metadata_date)
 
     def get_fieldsets(self, request, obj=None):
         """One fieldset per FormSection (in its order) holding the template's

@@ -387,10 +387,10 @@ class CoreMetadata(models.Model):
         help_text="End of data collection - fill in if known; leave empty if "
         "collection is ongoing.",
     )
-    metadata_date = models.DateField(
+    metadata_date = models.DateTimeField(
         auto_now=True, null=True,
-        help_text="Date this record was last saved (yyyy-mm-dd). System-filled "
-        "on every save.",
+        help_text="When this record was last saved (UTC). System-filled on "
+        "every save.",
     )
     spatial_representation_type = models.ForeignKey(
         SpatialRepresentationType,
@@ -872,10 +872,10 @@ BUILTIN_FIELD_SECTIONS = {
     "references": "supporting_documentation",
     "additional_information": "supporting_documentation",
     "comment": "supporting_documentation",
-    "acquisition_report_file": "supporting_documentation",
-    "project_report_link": "supporting_documentation",
-    "factsheet": "supporting_documentation",
-    "additional_information_file": "supporting_documentation",
+    "acquisition_report_file": "lidar_template",
+    "project_report_link": "lidar_template",
+    "factsheet": "lidar_template",
+    "additional_information_file": "lidar_template",
     "metadata_standard_name": "metadata_record",
     "metadata_standard_version": "metadata_record",
     "metadata_standard_language": "metadata_record",
@@ -1011,6 +1011,39 @@ def default_field_definitions(template):
     return sorted(rows, key=lambda row: row.order)
 
 
+# Built-in/standard fields a template only has when it adds them itself (the
+# LiDAR template does, in its "LiDAR Template" section) - listed and editable
+# on the template like its own fields.
+OPTIONAL_FIELD_NAMES = frozenset({
+    "acquisition_report_file",
+    "project_report_link",
+    "factsheet",
+    "additional_information_file",
+})
+
+# The default fields - every other built-in and standard field. Every
+# template always has them (ensure_default_fields); they're fixed, so the
+# template admin/API only edit a template's own fields.
+DEFAULT_FIELD_NAMES = frozenset(
+    [name for name, _, _ in BUILTIN_FIELDS] + [row[0] for row in STANDARD_FIELDS]
+) - OPTIONAL_FIELD_NAMES
+
+# Built-in fields a template can add as its own "Built-in field" rows.
+OPTIONAL_BUILTIN_FIELDS = [row for row in BUILTIN_FIELDS if row[0] in OPTIONAL_FIELD_NAMES]
+
+
+def ensure_default_fields(template):
+    """Add any default field `template` lacks (existing rows are left as
+    they are). Returns how many were added."""
+    have = set(template.fields.values_list("name", flat=True))
+    missing = [
+        row for row in default_field_definitions(template)
+        if row.name in DEFAULT_FIELD_NAMES and row.name not in have
+    ]
+    FieldDefinition.objects.bulk_create(missing)
+    return len(missing)
+
+
 def template_builtin_rows(template):
     """A template's built-in rows in order - or the defaults for every
     built-in field when there's no template."""
@@ -1060,13 +1093,24 @@ class FieldDefinition(models.Model):
     def is_builtin(self):
         return self.field_type == FieldType.BUILTIN
 
+    @property
+    def is_default(self):
+        """One of the fixed default fields every template has."""
+        return self.name in DEFAULT_FIELD_NAMES
+
     def clean(self):
+        """For a template's own fields - the default fields are fixed and
+        already on every template; of the built-in fields only the optional
+        ones (OPTIONAL_FIELD_NAMES) can be added."""
         if self.is_builtin:
-            if self.name not in BUILTIN_FIELD_MEMBERS:
-                raise ValidationError({"name": "Not a built-in field - one of: "
-                    + ", ".join(BUILTIN_FIELD_MEMBERS) + "."})
+            if self.name not in OPTIONAL_FIELD_NAMES or self.name not in BUILTIN_FIELD_MEMBERS:
+                raise ValidationError({"name": "Not an optional built-in field - one of: "
+                    + ", ".join(name for name, _, _ in OPTIONAL_BUILTIN_FIELDS) + "."})
         elif self.name in BUILTIN_FIELD_MEMBERS:
             raise ValidationError({"name": "Reserved for the built-in field of "
+                "the same name - choose type \"Built-in field\" for it."})
+        if self.name in DEFAULT_FIELD_NAMES:
+            raise ValidationError({"name": "Reserved for the default field of "
                 "the same name - pick another name."})
 
 
@@ -1173,7 +1217,7 @@ RECORD_SOURCE_CHOICES = [
     ("access_constraints_label", "access_constraints_label (display label)"),
     ("temporal_coverage_from", "temporal_coverage_from"),
     ("temporal_coverage_to", "temporal_coverage_to"),
-    ("metadata_date", "metadata_date (last saved, yyyy-mm-dd)"),
+    ("metadata_date", "metadata_date (last saved, UTC)"),
     (
         "spatial_representation_type.spatial_representation_type_value",
         "spatial_representation_type_value",
@@ -1283,8 +1327,8 @@ class ElasticsearchIndex(TimeStampedModel):
         # its field whitelist - the frontend sorts results by "created".
         # As UTC to the second, e.g. 2026-07-28T04:06:50Z - still an ISO date
         # Elasticsearch maps and sorts on.
-        properties["created"] = _utc_timestamp(record.created_at)
-        properties["updated"] = _utc_timestamp(record.updated_at)
+        properties["created"] = utc_timestamp(record.created_at)
+        properties["updated"] = utc_timestamp(record.updated_at)
 
         if "contacts" in properties:
             # The reference index sends "contacts" as an array (one entry per
@@ -1309,8 +1353,8 @@ class ElasticsearchIndex(TimeStampedModel):
             "type": "Feature",
             "time": {
                 "interval": [
-                    record.temporal_coverage_from.isoformat() if record.temporal_coverage_from else None,
-                    record.temporal_coverage_to.isoformat() if record.temporal_coverage_to else None,
+                    _jsonable(record.temporal_coverage_from),
+                    _jsonable(record.temporal_coverage_to),
                 ]
             },
             "geometry": geometry,
@@ -1573,7 +1617,8 @@ def resolve_source(record, path):
     without a code change.
     """
     if path.startswith("data."):
-        return _jsonable((record.data or {}).get(path[len("data."):]))
+        name = path[len("data."):]
+        return _jsonable(template_value(record, name, (record.data or {}).get(name)))
 
     value = record
     for part in path.split("."):
@@ -1586,8 +1631,45 @@ def resolve_source(record, path):
     return _jsonable(value)
 
 
-def _utc_timestamp(value):
-    return value.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def _template_field_types(record):
+    """{field name: field type} for the record's template, cached on it."""
+    types = getattr(record, "_template_field_types", None)
+    if types is None:
+        types = {}
+        if record.template_id:
+            types = dict(record.template.fields.values_list("name", "field_type"))
+        record._template_field_types = types
+    return types
+
+
+def template_value(record, name, value):
+    """A value from the record's `data`, with a Date / Date & time template
+    field's stored string turned back into a date/datetime (so it goes out
+    in the UTC format - see _utc_timestamp). Anything else as stored."""
+    if not isinstance(value, str) or not value:
+        return value
+    field_type = _template_field_types(record).get(name)
+    try:
+        if field_type == FieldType.DATE:
+            return date.fromisoformat(value[:10])
+        if field_type == FieldType.DATETIME:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:  # the admin's datetime box is UTC
+                parsed = parsed.replace(tzinfo=dt_timezone.utc)
+            return parsed
+    except ValueError:
+        pass
+    return value
+
+
+def utc_timestamp(value):
+    """The one date/time format used everywhere: a datetime as UTC to the second, e.g. 2026-07-28T04:06:50Z; a plain
+    date (temporal coverage) as midnight UTC, e.g. 2026-07-28T00:00:00Z."""
+    if not isinstance(value, datetime):
+        return f"{value.isoformat()}T00:00:00Z"
+    if value.tzinfo is not None:
+        value = value.astimezone(dt_timezone.utc)
+    return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _jsonable(value):
@@ -1598,7 +1680,7 @@ def _jsonable(value):
     if isinstance(value, models.fields.files.FieldFile):
         return value.name or None
     if isinstance(value, (datetime, date)):
-        return value.isoformat()
+        return utc_timestamp(value)
     if isinstance(value, models.Model):
         return str(value)
     return value

@@ -15,6 +15,12 @@ from django.db.models import Q
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from .models import utc_timestamp
+
+
+def _utc(value):
+    return utc_timestamp(value) if value else None
+
 
 class LegacyListEnvelopeMixin:
     legacy_data_key = None  # e.g. "contacts" - set per ViewSet
@@ -77,8 +83,8 @@ def legacy_metadata_dict(record):
         "title": record.title,
         "abstract": data.get("abstract"),
         "comment": data.get("comment"),
-        "temporal_coverage_from": record.temporal_coverage_from,
-        "temporal_coverage_to": record.temporal_coverage_to,
+        "temporal_coverage_from": _utc(record.temporal_coverage_from),
+        "temporal_coverage_to": _utc(record.temporal_coverage_to),
         "language": data.get("language"),
         "version": data.get("version"),
         "project_id": record.project_id,
@@ -132,8 +138,8 @@ def legacy_metadata_dict(record):
         "update_frequency": data.get("update_frequency"),
         "data_format": data.get("data_format"),
         "lineage": data.get("lineage"),
-        "created_at": record.created_at,
-        "updated_at": record.updated_at,
+        "created_at": _utc(record.created_at),
+        "updated_at": _utc(record.updated_at),
         "status": LEGACY_STATUS_DISPLAY.get(record.status, record.status),
         "file_name": record.file.name if record.file else None,
         "file_url": record.file.url if record.file else None,

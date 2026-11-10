@@ -12,94 +12,34 @@ export function cn(...inputs) {
 }
 
 /**
- * Formats a date/time string to a readable format.
+ * The one date/time format used across the app, matching the backend and
+ * pygeoapi: UTC to the second, e.g. 2026-07-28T04:06:50Z. A plain date
+ * (yyyy-mm-dd) is midnight UTC, e.g. 2026-07-28T00:00:00Z.
  *
  * @param dateTime - The date/time string or Date object to format.
- * @param options - Formatting options (optional).
- * @returns A formatted date/time string.
+ * @returns The formatted string, 'N/A' when empty or 'Invalid Date'.
  */
-export function formatDateTime(dateTime, options = {}) {
+export function formatDateTime(dateTime) {
   if (!dateTime) return 'N/A';
-  
-  try {
-    const date = new Date(dateTime);
-    
-    if (isNaN(date.getTime())) {
-      return 'Invalid Date';
-    }
-    
-    const defaultOptions = {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      ...options
-    };
-    
-    return date.toLocaleDateString('en-US', defaultOptions);
-  } catch (error) {
-    console.error('Error formatting date:', error);
+  const date = dateTime instanceof Date ? dateTime : new Date(dateTime);
+  if (isNaN(date.getTime())) {
     return 'Invalid Date';
   }
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
-/**
- * Formats a date/time string to a detailed readable format.
- *
- * @param dateTime - The date/time string or Date object to format.
- * @returns A detailed formatted date/time string.
- */
+/** Same as formatDateTime (kept for existing callers). */
 export function formatDateTimeDetailed(dateTime) {
-  if (!dateTime) return 'N/A';
-  
-  try {
-    const date = new Date(dateTime);
-    
-    if (isNaN(date.getTime())) {
-      return 'Invalid Date';
-    }
-    
-    const options = {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      timeZoneName: 'short'
-    };
-    
-    return date.toLocaleDateString('en-US', options);
-  } catch (error) {
-    console.error('Error formatting detailed date:', error);
-    return 'Invalid Date';
-  }
+  return formatDateTime(dateTime);
 }
 
-/**
- * Formats a date to a readable format (date only).
- *
- * @param date - The date string or Date object to format.
- * @returns A formatted date string.
- */
+/** Same as formatDateTime - dates are shown with their (midnight) UTC time. */
 export function formatDate(date) {
-  return formatDateTime(date, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric'
-  });
+  return formatDateTime(date);
 }
 
-/**
- * Formats a time to a readable format (time only).
- *
- * @param time - The time string or Date object to format.
- * @returns A formatted time string.
- */
+/** Just the UTC time part, e.g. 04:06:50Z. */
 export function formatTime(time) {
-  return formatDateTime(time, {
-    hour: '2-digit',
-    minute: '2-digit'
-  });
+  const formatted = formatDateTime(time);
+  return formatted.includes('T') ? formatted.split('T')[1] : formatted;
 }
