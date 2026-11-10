@@ -12,6 +12,7 @@ from django.shortcuts import get_object_or_404
 
 from .legacy_compat import LegacyListEnvelopeMixin, LegacyMetadataListMixin
 from .models import (
+    utc_timestamp,
     Contact,
     CoordinateReferenceSystem,
     Country,
@@ -63,6 +64,17 @@ def acquisition_report(request, filename):
 
 # --- Controlled-vocabulary lookups behind the core metadata fields ---
 # These populate the dropdowns on a record form, so they need to be listable.
+
+
+def _history_time(value):
+    """An action history timestamp in the UTC format (older entries were
+    stored with microseconds and +00:00)."""
+    from datetime import datetime
+
+    try:
+        return utc_timestamp(datetime.fromisoformat(value.replace("Z", "+00:00")))
+    except (AttributeError, ValueError):
+        return value
 
 
 class ContactViewSet(LegacyListEnvelopeMixin, viewsets.ModelViewSet):
@@ -180,7 +192,7 @@ class MetadataRecordViewSet(LegacyMetadataListMixin, viewsets.ModelViewSet):
         record.action_history.append({
             "action": action_name,
             "actioned_by": user.username if user and user.is_authenticated else None,
-            "actioned_at": timezone.now().isoformat(),
+            "actioned_at": utc_timestamp(timezone.now()),
             "comments": comments,
         })
 
@@ -233,7 +245,7 @@ def metadata_history(request, pk):
             "action": entry.get("action"),
             "actioned_by": entry.get("actioned_by"),
             "actioned_by_name": entry.get("actioned_by"),
-            "action_date": entry.get("actioned_at"),
+            "action_date": _history_time(entry.get("actioned_at")),
             "comments": entry.get("comments", ""),
         }
         for entry in history

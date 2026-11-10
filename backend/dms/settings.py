@@ -149,6 +149,8 @@ AUTH_PASSWORD_VALIDATORS = [
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 
 LANGUAGE_CODE = "en-us"
+# Admin shows dates/times as 2026-07-28T04:06:50Z (dms/formats/en/formats.py).
+FORMAT_MODULE_PATH = ["dms.formats"]
 
 TIME_ZONE = "UTC"
 
@@ -200,6 +202,12 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 25,
+    # Every date/time out as UTC to the second, e.g. 2026-07-28T04:06:50Z;
+    # plain dates as midnight UTC (api.models.utc_timestamp does the same for
+    # Elasticsearch/pygeoapi). Plain dates are still accepted as yyyy-mm-dd.
+    "DATETIME_FORMAT": "%Y-%m-%dT%H:%M:%SZ",
+    "DATE_FORMAT": "%Y-%m-%dT00:00:00Z",
+    "DATE_INPUT_FORMATS": ["iso-8601", "%Y-%m-%dT00:00:00Z"],
 }
 
 # JWT lifetimes matched to the legacy backend's ACCESS_TOKEN_EXPIRE_MINUTES/

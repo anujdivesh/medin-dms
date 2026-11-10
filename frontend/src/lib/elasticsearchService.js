@@ -1,4 +1,5 @@
 import { API_ENDPOINTS } from '@/config/apiEndpoints'
+import { formatDateTime } from '@/lib/utils'
 
 // Result orderings offered in the search UI. 'default' sends no sort, so a
 // title search ranks by match score and an unfiltered search keeps ES order.
@@ -80,8 +81,8 @@ class ElasticsearchService {
         keyword: properties.keywords || properties.keyword_value || 'Unknown',
         publisher: properties.publisher_value || 'Unknown',
         project: properties.project_name || 'Unknown',
-        created: properties.created ? new Date(properties.created).toLocaleDateString() : 'Unknown',
-        updated: properties.updated ? new Date(properties.updated).toLocaleDateString() : 'Unknown',
+        created: properties.created ? formatDateTime(properties.created) : 'Unknown',
+        updated: properties.updated ? formatDateTime(properties.updated) : 'Unknown',
         temporalFrom: properties.temporal_coverage_from || 'Unknown',
         temporalTo: properties.temporal_coverage_to || 'Unknown',
         language: properties.language || 'Unknown',
