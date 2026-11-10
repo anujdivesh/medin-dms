@@ -37,6 +37,8 @@ docker compose down -v   # remove containers + volumes
 
 docker exec -it dms-pygeoapi /bin/bash
 
+
+
 docker-compose stop pygeoapi
 docker-compose build pygeoapi
 docker-compose up pygeoapi
@@ -126,6 +128,10 @@ sudo cd /data/dms
 sudo eval "$(ssh-agent -s)"
 sudo ssh-add /root/.ssh/id_ed25519
 sudo ssh -T git@github.com
+
+
+docker compose down
+docker compose up --build -d
 
 ===local commands===
 

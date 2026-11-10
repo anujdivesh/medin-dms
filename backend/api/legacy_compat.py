@@ -68,16 +68,19 @@ def legacy_metadata_dict(record):
     country = record.country if record.country_id else None
 
     keyword_values = [k.keyword_value for k in record.keywords.all()]
+    # The plain MEDIN fields (abstract, lineage, ...) are template fields
+    # kept in `data`, not columns.
+    data = record.data or {}
 
     return {
         "id": record.pk,
         "title": record.title,
-        "abstract": record.abstract,
-        "comment": record.comment,
+        "abstract": data.get("abstract"),
+        "comment": data.get("comment"),
         "temporal_coverage_from": record.temporal_coverage_from,
         "temporal_coverage_to": record.temporal_coverage_to,
-        "language": record.language,
-        "version": record.version,
+        "language": data.get("language"),
+        "version": data.get("version"),
         "project_id": record.project_id,
         "project_name": project.project_name if project else None,
         "project_code": project.project_code if project else None,
@@ -114,21 +117,21 @@ def legacy_metadata_dict(record):
         "country_long_name": country.long_name if country else None,
         "access_constraints": record.access_constraints,
         "link_to_data": record.link_to_data,
-        "license": record.license,
-        "acknowledgement": record.acknowledgement,
-        "history": record.history,
-        "fundings": record.fundings,
-        "references_": record.references,
+        "license": data.get("license"),
+        "acknowledgement": data.get("acknowledgement"),
+        "history": data.get("history"),
+        "fundings": data.get("fundings"),
+        "references_": data.get("references"),
         "acquisition_report_link": record.acquisition_report_link,
         "project_report_link": record.project_report_link,
-        "factsheet": record.factsheet,
-        "attribute": record.attribute,
-        "metadata_standard_language": record.metadata_standard_language,
-        "metadata_standard_version": record.metadata_standard_version,
-        "metadata_standard_name": record.metadata_standard_name,
-        "update_frequency": record.update_frequency,
-        "data_format": record.data_format,
-        "lineage": record.lineage,
+        "factsheet": data.get("factsheet"),
+        "attribute": data.get("attribute"),
+        "metadata_standard_language": data.get("metadata_standard_language"),
+        "metadata_standard_version": data.get("metadata_standard_version"),
+        "metadata_standard_name": data.get("metadata_standard_name"),
+        "update_frequency": data.get("update_frequency"),
+        "data_format": data.get("data_format"),
+        "lineage": data.get("lineage"),
         "created_at": record.created_at,
         "updated_at": record.updated_at,
         "status": LEGACY_STATUS_DISPLAY.get(record.status, record.status),
@@ -188,7 +191,8 @@ class LegacyMetadataListMixin:
         queryset = self.filter_queryset(self.get_queryset())
         if q:
             queryset = queryset.filter(
-                Q(title__icontains=q) | Q(abstract__icontains=q) | Q(comment__icontains=q)
+                Q(title__icontains=q) | Q(data__abstract__icontains=q)
+                | Q(data__comment__icontains=q)
             )
         records = [legacy_metadata_dict(r) for r in queryset]
         return Response({

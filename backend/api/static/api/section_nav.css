@@ -1,0 +1,88 @@
+/* "Sections" panel beside the MetadataRecord admin form (section_nav.js).
+   Uses the admin's own colour variables so it follows light/dark mode. */
+
+.section-nav {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline-color, #e8e8e8);
+  border-radius: 4px;
+  background: var(--darkened-bg, #f8f8f8);
+  font-size: 0.8125rem;
+}
+
+.section-nav-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--body-quiet-color, #666);
+}
+
+.section-nav ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+.section-nav li {
+  list-style: none;
+  padding: 0;
+}
+
+/* "#content-main ... li a" outranks the admin's own link-underline rule (which
+   exempts its nav panels by id), so this nav reads like the sidebar. */
+#content-main .section-nav li a {
+  display: block;
+  padding: 4px 8px;
+  border-left: 3px solid transparent;
+  border-radius: 0 3px 3px 0;
+  color: var(--link-fg, #417893);
+  text-decoration: none;
+}
+
+#content-main .section-nav li a:hover {
+  background: var(--selected-bg, #e4e4e4);
+}
+
+#content-main .section-nav li a.active {
+  border-left-color: var(--primary, #79aec8);
+  background: var(--selected-bg, #e4e4e4);
+  color: var(--body-fg, #333);
+  font-weight: 600;
+}
+
+/* Wide screens: a sticky column on the right of the form. Narrow screens
+   keep the wrapped list above the form. */
+@media (min-width: 1200px) {
+  .has-section-nav #content-main {
+    display: flex;
+    flex-direction: row-reverse;
+    align-items: flex-start;
+    gap: 24px;
+  }
+
+  .has-section-nav #content-main > form {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .section-nav {
+    position: sticky;
+    top: 16px;
+    flex: 0 0 220px;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    margin: 0;
+  }
+
+  .section-nav ol {
+    display: block;
+  }
+
+  .section-nav li + li {
+    margin-top: 2px;
+  }
+}

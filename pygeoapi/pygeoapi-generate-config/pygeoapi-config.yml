@@ -1,11 +1,11 @@
 #####################
-#   ENV FOR DOCKER ##
+#   ENV FOR LOCAL ##
 #####################
 server:
   bind:
     host: 0.0.0.0
     port: 5000
-  url: https://opmthredds.gem.spc.int/dms/pygeoapi
+  url: http://localhost:5000
   mimetype: application/json; charset=UTF-8
   encoding: utf-8
   gzip: false
@@ -18,33 +18,37 @@ server:
   map:
     url: https://tile.openstreetmap.org/{z}/{x}/{y}.png
     attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap contributors</a>'
+    # CORS configuration
+  cors: true
     # Overrides collections/items/index.html to drop the start/end date
     # filter from the items HTML page - see pygeoapi/templates/.
   templates:
-    path: /app/templates
+    path: /mnt/c/Code/new_new_dms/pygeoapi/templates
 
 logging:
   level: DEBUG
 
 metadata:
   identification:
-    title: Ocean Data Management System
-    description: API for accessing oceanographic metadata using Elasticsearch
+    title: Data Management System API
+    description: API for accessing geospatial metadata from Elasticsearch
     keywords:
-    - oceanograhy
+    - oceanography
+    - metadata
     - lidar
+    - api
     - observations
     - satellite imagery
     - bathymetry
     keywords_type: theme
     terms_of_service: https://creativecommons.org/licenses/by/4.0/
-    url: https://opmthredds.gem.spc.int/dms/pygeoapi
+    url: http://localhost:5000
   license:
     name: CC-BY 4.0 license
     url: https://creativecommons.org/licenses/by/4.0/
   provider:
     name: Ocean Database
-    url: https://opmthredds.gem.spc.int/dms/pygeoapi
+    url: http://localhost:5000
   contact:
     name: Herve Damlamian
     position: Team Leader Ocean Prediction and Monitoring
@@ -113,15 +117,15 @@ resources:
     providers:
     - type: record
       name: ElasticsearchCatalogue
-      data: http://elastic:T2NlYW5wb3J0YWwyMDE3@elasticsearch:9200/lidar
+      data: http://elastic:T2NlYW5wb3J0YWwyMDE3@localhost:9200/lidar
       id_field: id
       title_field: title
   oceanography:
     type: collection
-    title: Oceanography Metadata
-    description: Oceanography metadata records
+    title: Oceanography Metadata records
+    description: Oceanography metadata records from the DMS system
     keywords:
-    - oceanography
+    - oceanograhy
     - lidar
     - observations
     - satellite imagery
@@ -133,6 +137,6 @@ resources:
     providers:
     - type: record
       name: ElasticsearchCatalogue
-      data: http://elastic:T2NlYW5wb3J0YWwyMDE3@elasticsearch:9200/oceanography
+      data: http://elastic:T2NlYW5wb3J0YWwyMDE3@localhost:9200/oceanography
       id_field: id
       title_field: title

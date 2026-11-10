@@ -9,6 +9,7 @@ from .models import (
     DataType,
     FieldDefinition,
     Keyword,
+    LINK_OR_FILE_FIELDS,
     MetadataRecord,
     MetadataTemplate,
     MetadataType,
@@ -16,6 +17,10 @@ from .models import (
     Publisher,
     SpatialRepresentationType,
     Topic,
+    AUTO_BUILTIN_MEMBERS,
+    BUILTIN_FIELD_MEMBERS,
+    default_field_definitions,
+    template_builtin_rows,
     validate_record_data,
 )
 
@@ -147,6 +152,7 @@ class FieldDefinitionSerializer(serializers.ModelSerializer):
             "required",
             "choices",
             "default",
+            "section",
             "order",
         ]
 
@@ -171,12 +177,33 @@ class MetadataTemplateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["slug", "created_at", "updated_at"]
 
+    def validate_fields(self, fields_data):
+        """Same built-in row naming rules as FieldDefinition.clean()."""
+        errors = {}
+        for f in fields_data:
+            try:
+                FieldDefinition(**f).clean()
+            except DjangoValidationError as exc:
+                errors[f.get("name", "")] = exc.messages
+        if errors:
+            raise serializers.ValidationError(errors)
+        return fields_data
+
+    def _field_rows(self, template, fields_data):
+        return [FieldDefinition(template=template, **f) for f in fields_data]
+
     def create(self, validated_data):
         fields_data = validated_data.pop("fields", [])
         template = MetadataTemplate.objects.create(**validated_data)
-        FieldDefinition.objects.bulk_create(
-            [FieldDefinition(template=template, **f) for f in fields_data]
-        )
+        rows = self._field_rows(template, fields_data)
+        # Every new template lists the built-in and standard fields; the
+        # given ones win.
+        given = {row.name for row in rows}
+        rows += [
+            row for row in default_field_definitions(template)
+            if row.name not in given
+        ]
+        FieldDefinition.objects.bulk_create(rows)
         return template
 
     def update(self, instance, validated_data):
@@ -188,9 +215,7 @@ class MetadataTemplateSerializer(serializers.ModelSerializer):
         # Replace the field set wholesale when provided.
         if fields_data is not None:
             instance.fields.all().delete()
-            FieldDefinition.objects.bulk_create(
-                [FieldDefinition(template=instance, **f) for f in fields_data]
-            )
+            FieldDefinition.objects.bulk_create(self._field_rows(instance, fields_data))
         return instance
 
 
@@ -245,11 +270,8 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
             "template",
             "template_name",
             "title",
-            "abstract",
             "contact",
             "contact_detail",
-            "language",
-            "version",
             "country",
             "country_detail",
             "country_short_name",
@@ -276,15 +298,9 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
             "keywords",
             "keywords_detail",
             "access_constraints",
-            "license",
             "temporal_coverage_from",
             "temporal_coverage_to",
-            "metadata_standard_name",
-            "metadata_standard_version",
-            "metadata_standard_language",
-            "update_frequency",
-            "lineage",
-            "data_format",
+            "metadata_date",
             "spatial_representation_type",
             "spatial_representation_type_detail",
             "data_type",
@@ -293,16 +309,11 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
             "project_detail",
             "metadata_type",
             "metadata_type_detail",
-            "comment",
             "link_to_data",
-            "acknowledgement",
-            "history",
-            "fundings",
-            "references",
+            "acquisition_report_link",
             "acquisition_report_file",
             "project_report_link",
-            "factsheet",
-            "attribute",
+            "project_report_file",
             "additional_information",
             "additional_information_file",
             "file",
@@ -322,6 +333,7 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
             "reviewed_by",
             "reviewed_at",
             "action_history",
+            "metadata_date",
             "created_at",
             "updated_at",
         ]
@@ -331,10 +343,40 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
         temporal coverage range."""
         template = attrs.get("template") or getattr(self.instance, "template", None)
         data = attrs.get("data", getattr(self.instance, "data", {}))
+        if self.instance is None and template is not None and isinstance(data, dict):
+            # A new record starts from each template field's default.
+            defaults = {
+                fd.name: fd.default for fd in template.fields.all()
+                if not fd.is_builtin and fd.default not in (None, "")
+            }
+            data = attrs["data"] = {**defaults, **data}
         if template is not None:
             errors = validate_record_data(template, data)
             if errors:
                 raise serializers.ValidationError({"data": errors})
+
+        # The record columns the template ticks "required" (the defaults with
+        # no template) - the database itself lets every one be empty.
+        def current(name):
+            if name in attrs:
+                return attrs[name]
+            if self.instance is None:  # new record: what the column defaults to
+                field = MetadataRecord._meta.get_field(name)
+                return None if field.many_to_many else field.get_default()
+            value = getattr(self.instance, name)
+            return list(value.all()) if name == "keywords" else value
+
+        link_or_file = {radio: [link, upload] for radio, link, upload, _ in LINK_OR_FILE_FIELDS}
+        missing = {}
+        for fd in template_builtin_rows(template):
+            first = BUILTIN_FIELD_MEMBERS[fd.name][0]
+            if not fd.required or fd.name == "boundary" or first in AUTO_BUILTIN_MEMBERS:
+                continue
+            names = link_or_file.get(first, [first])
+            if not any(current(n) for n in names):  # empty FieldFile is falsy too
+                missing[names[0]] = "This field is required."
+        if missing:
+            raise serializers.ValidationError(missing)
 
         start = attrs.get(
             "temporal_coverage_from",
@@ -347,6 +389,16 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"temporal_coverage_to": "Must be on or after 'temporal_coverage_from'."}
             )
+
+        # Each link-or-upload field is either a typed link or an uploaded
+        # file, not both.
+        for _, link, upload, _ in LINK_OR_FILE_FIELDS:
+            typed = attrs.get(link, getattr(self.instance, link, ""))
+            uploaded = attrs.get(upload, getattr(self.instance, upload, None))
+            if (typed or "").strip() and uploaded:
+                raise serializers.ValidationError(
+                    {link: "Give either a link or an uploaded file, not both."}
+                )
 
         # Same polygon check + bounding-field derivation the admin gets from
         # the model's clean(), run on the merged (instance + incoming) values.
