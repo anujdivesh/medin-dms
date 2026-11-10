@@ -261,3 +261,6 @@ PYGEOAPI_AUTO_RESTART = os.getenv("PYGEOAPI_AUTO_RESTART", "True") == "True"
 # running pygeoapi/restart.sh directly (or via `wsl.exe -d Ubuntu` if this
 # Django process itself is running natively on Windows rather than in WSL).
 PYGEOAPI_RESTART_COMMAND = os.getenv("PYGEOAPI_RESTART_COMMAND", "")
+# Public pygeoapi address for the admin's "View in pygeoapi" links. Empty =
+# server.url from pygeoapi-config.yml (api.pygeoapi_sync.public_url).
+PYGEOAPI_PUBLIC_URL = os.getenv("PYGEOAPI_PUBLIC_URL", "")
