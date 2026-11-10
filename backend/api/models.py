@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from datetime import timezone as dt_timezone
 from decimal import Decimal
 
 from django.conf import settings
@@ -1260,7 +1261,13 @@ class ElasticsearchIndex(TimeStampedModel):
         hidden = set() if is_open else PRIVATE_HIDDEN_SOURCES
         # hidden = set() if is_open else set(record.hidden_when_private or [])
         properties = {}
-        for field in self.fields.filter(is_enabled=True).order_by("order", "id"):
+        # In the order of the record's template fields (the Dataset Metadata
+        # Template's), so pygeoapi lists them as the document does.
+        fields = sorted(
+            self.fields.filter(is_enabled=True).order_by("order", "id"),
+            key=_document_position(record.template),
+        )
+        for field in fields:
             if field.source in hidden:
                 continue
             value = resolve_source(record, field.source)
@@ -1274,8 +1281,10 @@ class ElasticsearchIndex(TimeStampedModel):
 
         # OGC-API-Records core timestamps, sent for every index regardless of
         # its field whitelist - the frontend sorts results by "created".
-        properties["created"] = record.created_at.isoformat()
-        properties["updated"] = record.updated_at.isoformat()
+        # As UTC to the second, e.g. 2026-07-28T04:06:50Z - still an ISO date
+        # Elasticsearch maps and sorts on.
+        properties["created"] = _utc_timestamp(record.created_at)
+        properties["updated"] = _utc_timestamp(record.updated_at)
 
         if "contacts" in properties:
             # The reference index sends "contacts" as an array (one entry per
@@ -1308,6 +1317,52 @@ class ElasticsearchIndex(TimeStampedModel):
             "properties": properties,
             "links": links,
         }
+
+    def add_document_fields(self):
+        """Add field maps for the Dataset Metadata Template fields this index
+        doesn't send yet (DOCUMENT_INDEX_FIELDS) - one it already covers in
+        any form, or whose key is taken, is left alone - then sort all its
+        fields in document order. Returns how many were added."""
+        existing = list(self.fields.all())
+        covered = {_index_field_key(f.source) for f in existing}
+        sources = {f.source for f in existing}
+        keys = {f.target_key for f in existing}
+        added = 0
+        for key, maps in DOCUMENT_INDEX_FIELDS:
+            if key in covered:
+                continue
+            for source, target, es_type in maps:
+                target_key = target or source.replace(".", "_")
+                if source in sources or target_key in keys:
+                    continue
+                ElasticsearchFieldMap.objects.create(
+                    index=self, source=source, target=target, es_type=es_type,
+                )
+                sources.add(source)
+                keys.add(target_key)
+                added += 1
+        self.sort_fields_by_document()
+        return added
+
+    def sort_fields_by_document(self):
+        """Renumber this index's field maps 1, 2, 3, ... in document order
+        (each field's default position - for a template's own fields, its
+        lowest order on any template), fields belonging to none last."""
+        positions = dict(BUILTIN_FIELD_POSITIONS)
+        for name, order in FieldDefinition.objects.values_list("name", "order"):
+            positions.setdefault(name, order)
+            positions[name] = min(positions[name], order)
+        last = 10 ** 6
+
+        def key(field_map):
+            name = source_field_name(field_map.source)
+            return positions.get(name, last) if name else last
+
+        fields = sorted(self.fields.order_by("order", "id"), key=key)
+        for number, field_map in enumerate(fields, start=1):
+            if field_map.order != number:
+                field_map.order = number
+                field_map.save(update_fields=["order"])
 
     def build_mapping(self):
         """Return an Elasticsearch mapping body for the enabled fields."""
@@ -1367,6 +1422,146 @@ class ElasticsearchFieldMap(models.Model):
         return self.target or self.source.replace(".", "_")
 
 
+# Source paths that aren't a built-in field's own column, -> the built-in
+# field they belong to (computed values, related lookups).
+_SOURCE_FIELD_EXTRAS = {
+    "west_bound_longitude": "boundary",
+    "east_bound_longitude": "boundary",
+    "south_bound_latitude": "boundary",
+    "north_bound_latitude": "boundary",
+    "crs_name": "country",
+    "access_constraints_label": "access_constraints",
+    "link_to_data_url": "link_to_data",
+    "file_url": "link_to_data",
+    "acquisition_report_url": "acquisition_report_file",
+    "project_report_url": "project_report_link",
+    "additional_information_value": "additional_information",
+}
+
+
+def source_field_name(source):
+    """The template field a field-map source belongs to - `data.lineage` ->
+    "lineage", `contact.email` -> "contact", `file_url` -> "link_to_data" -
+    or None (id, status, created_at, ...)."""
+    if source.startswith("data."):
+        return source[len("data."):]
+    root = source.split(".", 1)[0]
+    if root in _SOURCE_FIELD_EXTRAS:
+        return _SOURCE_FIELD_EXTRAS[root]
+    for name, members in BUILTIN_FIELD_MEMBERS.items():
+        if root in members:
+            return name
+    return None
+
+
+# Every Dataset Metadata Template field the records have, as the field maps
+# that send it to the search index: (key, [(source, target, es_type), ...]).
+# ElasticsearchIndex.add_document_fields() adds the ones an index lacks.
+# Date of creation (#24) isn't a record field yet.
+DOCUMENT_INDEX_FIELDS = [
+    ("title", [("title", "", "text")]),
+    ("abstract", [("data.abstract", "abstract", "text")]),
+    ("resource_identifier", [("data.resource_identifier", "resource_identifier", "keyword")]),
+    ("data_type", [("data_type.data_type_value", "data_type_value", "keyword")]),
+    ("version", [("data.version", "version", "text")]),
+    ("language", [("data.language", "language", "keyword")]),
+    ("project", [("project.project_name", "project_name", "text")]),
+    ("topic", [("topic.topic_value", "topic_value", "keyword")]),
+    ("keywords", [("keywords.keyword_value", "keywords", "keyword")]),
+    ("contact", [
+        ("contact.organization", "contact_organization", "text"),
+        ("contact.email", "contact_email", "keyword"),
+    ]),
+    ("publisher", [("publisher.publisher_value", "publisher_value", "keyword")]),
+    ("originator", [("data.originator", "originator", "text")]),
+    ("custodian", [("data.custodian", "custodian", "text")]),
+    ("owner", [("data.owner", "owner", "text")]),
+    ("fundings", [("data.fundings", "fundings", "text")]),
+    ("country", [("country.long_name", "country_long_name", "keyword")]),
+    ("west_bound", [("west_bound_longitude", "west_bounding_longitude", "float")]),
+    ("east_bound", [("east_bound_longitude", "east_bounding_longitude", "float")]),
+    ("south_bound", [("south_bound_latitude", "south_bounding_latitude", "float")]),
+    ("north_bound", [("north_bound_latitude", "north_bounding_latitude", "float")]),
+    ("temporal_coverage_from", [("temporal_coverage_from", "", "date")]),
+    ("temporal_coverage_to", [("temporal_coverage_to", "", "date")]),
+    ("coordinate_reference_system", [("coordinate_reference_system.crs_value", "crs_value", "keyword")]),
+    ("spatial_representation_type", [(
+        "spatial_representation_type.spatial_representation_type_value",
+        "spatial_representation_type", "keyword",
+    )]),
+    ("spatial_resolution", [("data.spatial_resolution", "spatial_resolution", "text")]),
+    ("lineage", [("data.lineage", "lineage", "text")]),
+    ("history", [("data.history", "history", "text")]),
+    ("update_frequency", [("data.update_frequency", "update_frequency", "keyword")]),
+    ("access_constraints", [("access_constraints_label", "access_constraints", "keyword")]),
+    ("acknowledgement", [("data.acknowledgement", "acknowledgement", "text")]),
+    ("link_to_data", [("link_to_data_url", "link_to_data", "text")]),
+    ("protocol", [("data.protocol", "protocol", "keyword")]),
+    ("data_format", [("data.data_format", "data_format", "keyword")]),
+    ("file", [("file_url", "", "text")]),
+    ("file_description", [("file_description", "", "text")]),
+    ("attribute", [("data.attribute", "attribute", "text")]),
+    ("references", [("data.references", "references", "text")]),
+    ("additional_information", [("additional_information_value", "additional_information", "text")]),
+    ("comment", [("data.comment", "comment", "text")]),
+    ("metadata_standard_name", [("data.metadata_standard_name", "metadata_standard_name", "text")]),
+    ("metadata_standard_version", [("data.metadata_standard_version", "metadata_standard_version", "keyword")]),
+    ("metadata_standard_language", [("data.metadata_standard_language", "metadata_standard_language", "keyword")]),
+    ("character_encoding", [("data.character_encoding", "character_encoding", "keyword")]),
+    ("metadata_date", [("metadata_date", "", "date")]),
+    ("acquisition_report", [("acquisition_report_url", "acquisition_report", "text")]),
+    ("project_report", [("project_report_url", "project_report", "text")]),
+    ("factsheet", [("data.factsheet", "factsheet", "text")]),
+]
+
+# Source roots -> the DOCUMENT_INDEX_FIELDS key they count as, beyond
+# `data.<key>` and a root named like the key.
+_INDEX_FIELD_ROOTS = {
+    "crs_name": "country",
+    "boundary_type": "boundary", "boundary_polygon": "boundary",
+    "west_bound_longitude": "west_bound", "east_bound_longitude": "east_bound",
+    "south_bound_latitude": "south_bound", "north_bound_latitude": "north_bound",
+    "west_bounding_longitude": "west_bound", "east_bounding_longitude": "east_bound",
+    "south_bounding_latitude": "south_bound", "north_bounding_latitude": "north_bound",
+    "access_constraints_label": "access_constraints",
+    "link_to_data_url": "link_to_data",
+    "file_url": "file",
+    "acquisition_report_link": "acquisition_report",
+    "acquisition_report_file": "acquisition_report",
+    "acquisition_report_url": "acquisition_report",
+    "project_report_link": "project_report",
+    "project_report_file": "project_report",
+    "project_report_url": "project_report",
+    "additional_information_file": "additional_information",
+    "additional_information_value": "additional_information",
+}
+
+
+def _index_field_key(source):
+    """Which DOCUMENT_INDEX_FIELDS entry an existing field map already
+    covers - e.g. `contact.firstname` covers "contact"."""
+    if source.startswith("data."):
+        return source[len("data."):]
+    root = source.split(".", 1)[0]
+    return _INDEX_FIELD_ROOTS.get(root, root)
+
+
+def _document_position(template):
+    """Sort key for a record's field maps: the template's order for the
+    field each one belongs to (default position if the template lacks it),
+    with fields belonging to none (id, status, ...) last. Ties keep the
+    field maps' own order."""
+    order = {fd.name: fd.order for fd in template.fields.all()} if template else {}
+    last = 10 ** 6
+
+    def key(field_map):
+        name = source_field_name(field_map.source)
+        if name is None:
+            return last
+        return order.get(name, BUILTIN_FIELD_POSITIONS.get(name, last))
+    return key
+
+
 def resolve_source(record, path):
     """Resolve a `source` path against a record into a JSON-safe value.
 
@@ -1389,6 +1584,10 @@ def resolve_source(record, path):
         else:
             value = getattr(value, part, None)
     return _jsonable(value)
+
+
+def _utc_timestamp(value):
+    return value.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _jsonable(value):
