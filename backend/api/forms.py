@@ -4,60 +4,46 @@ from django import forms
 from django.core.files.storage import default_storage
 from django.db.models import Model
 
-from .models import FieldType, MetadataRecord
+from .models import (
+    AUTO_BUILTIN_MEMBERS,
+    BUILTIN_FIELDS,
+    LINK_OR_FILE_FIELDS,
+    FieldType,
+    MetadataRecord,
+)
 
 # Prefix that marks a form field as a template ("data") field.
 DYNAMIC_PREFIX = "tpl__"
 
-# The editable core fields shown on every record, in display order.
-CORE_FIELDS = [
-    "template",
-    "metadata_type",
-    "title",
-    "abstract",
-    "comment",
-    "contact",
-    "language",
-    "version",
-    "country",
-    "boundary_type",
-    "west_bounding_longitude",
-    "east_bounding_longitude",
-    "south_bounding_latitude",
-    "north_bounding_latitude",
-    "boundary_polygon",
-    "coordinate_reference_system",
-    "publisher",
-    "topic",
-    "keywords",
-    "data_type",
-    "project",
-    "access_constraints",
-    "hidden_when_private",
-    "license",
-    "temporal_coverage_from",
-    "temporal_coverage_to",
-    "metadata_standard_name",
-    "metadata_standard_version",
-    "metadata_standard_language",
-    "update_frequency",
-    "lineage",
-    "data_format",
-    "spatial_representation_type",
-    "link_to_data",
-    "acknowledgement",
-    "history",
-    "fundings",
-    "references",
-    "acquisition_report_file",
-    "project_report_link",
-    "factsheet",
-    "attribute",
-    "additional_information",
-    "additional_information_file",
-    "file",
-    "file_description",
+# The editable core fields shown on a record with no template picked yet, in
+# display order: the two always-shown pickers, then every built-in field
+# (bar the system-filled ones, which the admin shows read-only).
+CORE_FIELDS = ["template", "metadata_type"] + [
+    member for _, _, members in BUILTIN_FIELDS for member in members
+    if member not in AUTO_BUILTIN_MEMBERS
 ]
+
+# Values of a link-or-upload radio (LINK_OR_FILE_FIELDS): a typed link/path,
+# or an uploaded file.
+LINK_TO_DATA_LINK = "link"
+LINK_TO_DATA_FILE = "file"
+
+
+def _link_or_file_radio(label, help_text, link_field, file_fields):
+    """A link-or-upload radio. Not stored - it picks which of the two columns
+    the record keeps (see clean()); link_to_data.js reads the data-* attrs to
+    show only the picked one."""
+    return forms.ChoiceField(
+        label=label,
+        choices=[(LINK_TO_DATA_LINK, "Link"), (LINK_TO_DATA_FILE, "File upload")],
+        initial=LINK_TO_DATA_LINK,
+        required=False,  # not sent -> neither column is cleared
+        widget=forms.RadioSelect(attrs={
+            "data-link-field": link_field,
+            "data-file-fields": " ".join(file_fields),
+        }),
+        help_text=help_text,
+    )
 
 
 def _empty_choice(required):
@@ -99,6 +85,8 @@ def build_form_field(field_def, value):
         ]
         return forms.ChoiceField(choices=choices, **common)
     if ftype == FieldType.MULTISELECT:
+        if isinstance(value, str):  # a default typed as "a, b"
+            common["initial"] = [v.strip() for v in value.split(",") if v.strip()]
         choices = [(c, c) for c in field_def.choices]
         return forms.MultipleChoiceField(choices=choices, **common)
     if ftype in (FieldType.FILE, FieldType.IMAGE):
@@ -112,7 +100,7 @@ def build_form_field(field_def, value):
             label=field_def.label or field_def.name,
             # Don't force a re-upload if a file is already stored.
             required=field_def.required and not value,
-            help_text=" — ".join(b for b in help_bits if b),
+            help_text="- ".join(b for b in help_bits if b),
         )
     return forms.CharField(**common)  # default: plain text
 
@@ -135,12 +123,41 @@ class MetadataRecordAdminForm(forms.ModelForm):
     """Base form. The template ("tpl__") fields are injected per-record by the
     admin's get_form(); here we just assemble and validate them into `data`."""
 
+    link_to_data_source = _link_or_file_radio(
+        "Link to data as",
+        "Either type a link/path to the data, or upload the data file.",
+        "link_to_data", ["file", "file_description"],
+    )
+    acquisition_report_source = _link_or_file_radio(
+        "Acquisition report as",
+        "Either link to the acquisition report, or upload it.",
+        "acquisition_report_link", ["acquisition_report_file"],
+    )
+    project_report_source = _link_or_file_radio(
+        "Project report as",
+        "Either link to the project report, or upload it.",
+        "project_report_link", ["project_report_file"],
+    )
+
+    # The link-or-upload radios whose field the record's template marks
+    # required - set by the admin.
+    required_sources = frozenset()
+
     class Meta:
         model = MetadataRecord
         fields = CORE_FIELDS
+        # Short free-text columns entered on one line rather than as a
+        # multi-line box (still TextFields, so no length limit).
+        widgets = {
+            name: forms.TextInput(attrs={"class": "vTextField"})
+            for name in ("link_to_data", "acquisition_report_link", "project_report_link")
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        for radio, _, upload, _ in LINK_OR_FILE_FIELDS:
+            if radio in self.fields and getattr(self.instance, upload):
+                self.fields[radio].initial = LINK_TO_DATA_FILE
         # The form owns `data` validation (field-by-field), so switch off the
         # model's aggregate check to avoid duplicate errors on save.
         self.instance._skip_data_clean = True
@@ -148,6 +165,24 @@ class MetadataRecordAdminForm(forms.ModelForm):
     def clean(self):
         cleaned = super().clean()
         existing = self.instance.data or {}  # capture before we rebuild it
+
+        # Keep only the picked source of each link-or-upload field. A file
+        # widget cleans to the new upload, the stored file, or False when
+        # cleared.
+        for radio, link, upload, extras in LINK_OR_FILE_FIELDS:
+            source = cleaned.get(radio)
+            required = radio in self.required_sources
+            if source == LINK_TO_DATA_FILE:
+                cleaned[link] = ""
+                if required and not cleaned.get(upload):
+                    self.add_error(upload, "Upload a file, or switch "
+                        f"“{self.fields[radio].label}” to Link.")
+            elif source == LINK_TO_DATA_LINK:
+                if required and not (cleaned.get(link) or "").strip():
+                    self.add_error(link, "This field is required.")
+                cleaned[upload] = False  # clears any stored file
+                for extra in extras:
+                    cleaned[extra] = ""
 
         # Greyed-out (disabled) picks aren't submitted by the browser - keep
         # the saved ones so they still apply if that field is mapped later.
@@ -172,7 +207,7 @@ class MetadataRecordAdminForm(forms.ModelForm):
             if isinstance(field, forms.FileField):
                 if value:  # a new file was uploaded
                     data[key] = _store_upload(value)
-                elif key in existing:  # nothing uploaded — keep the old file
+                elif key in existing:  # nothing uploaded- keep the old file
                     data[key] = existing[key]
                 continue
 

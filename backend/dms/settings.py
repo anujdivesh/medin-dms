@@ -213,7 +213,7 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": False,
 }
 
-# CORS — allow your frontend origin(s)
+# CORS- allow your frontend origin(s)
 # https://github.com/adamchainz/django-cors-headers
 CORS_ALLOWED_ORIGINS = [
     origin
@@ -223,7 +223,7 @@ CORS_ALLOWED_ORIGINS = [
     if origin
 ]
 
-# Elasticsearch — used by the push_to_elasticsearch management command and
+# Elasticsearch- used by the push_to_elasticsearch management command and
 # api.elasticsearch_sync (real-time sync on save/delete). Which record fields
 # are sent for *custom* indexes is configured per index in the admin
 # (api.ElasticsearchIndex); the legacy-compatibility "metadata" index's shape

@@ -136,7 +136,7 @@ class MetadataTemplateViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def schema(self, request, pk=None):
-        """Return just the ordered field definitions — useful for form builders."""
+        """Return just the ordered field definitions- useful for form builders."""
         template = self.get_object()
         serializer = FieldDefinitionSerializer(template.fields.all(), many=True)
         return Response(serializer.data)
@@ -147,7 +147,7 @@ class MetadataRecordViewSet(LegacyMetadataListMixin, viewsets.ModelViewSet):
 
     No approval workflow - create/update require the standard Django model
     permissions (`api.add_metadatarecord` etc.); delete requires the
-    separate `api.approve_metadatarecord` permission — mirrors the legacy
+    separate `api.approve_metadatarecord` permission- mirrors the legacy
     backend's approver-only delete gate.
     """
 

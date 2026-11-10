@@ -158,7 +158,7 @@
       '<button type="button" id="boundary-map-clear" class="button">Clear</button>' +
       "</div>" +
       '<div id="boundary-map" style="height: 350px; max-width: 700px; border: 1px solid #ccc;"></div>' +
-      '<p class="help">Click "Draw on map", then drag a rectangle (Zone), click once (Point), or click each corner and then the first point again to finish (Polygon) - matches the toggle above. The fields update automatically; you can also edit them directly.</p>';
+      '<p class="help">Click "Draw on map", then drag a rectangle for bounding box, click once for Point, or for Polygon click each corner and then the first point again to finish</p>';
     typeRow.parentNode.insertBefore(mapRow, typeRow.nextSibling);
 
     loadCss("https://unpkg.com/leaflet@1.3.1/dist/leaflet.css");

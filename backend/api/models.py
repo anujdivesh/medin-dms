@@ -24,6 +24,7 @@ class FieldType(models.TextChoices):
     MULTISELECT = "multiselect", "Select (many choices)"
     FILE = "file", "File upload"
     IMAGE = "image", "Image upload"
+    BUILTIN = "builtin", "Built-in field"
 
 
 class TimeStampedModel(models.Model):
@@ -226,12 +227,14 @@ class AccessConstraints(models.TextChoices):
 LINK_AND_FILE_SOURCES = [
     "link_to_data",
     "link_to_data_url",
+    "acquisition_report_link",
     "acquisition_report_file",
     "acquisition_report_url",
     "additional_information",
     "additional_information_file",
     "additional_information_value",
     "project_report_link",
+    "project_report_file",
     "project_report_url",
     "file",
     "file_url",
@@ -242,9 +245,22 @@ def default_hidden_when_private():
     return list(LINK_AND_FILE_SOURCES)
 
 
+# What a private record withholds from its search-index document - for now
+# fixed to Link to data (typed link or uploaded file), in place of each
+# record's own `hidden_when_private` pick (its admin picker is commented out).
+PRIVATE_HIDDEN_SOURCES = {"link_to_data", "link_to_data_url", "file", "file_url"}
+
+
 # Upper bound for a record's own longitudes (lower bound is 0) - see
 # MetadataRecord.clean_coordinate_ranges. Mirrored in boundary_map.js.
 MAX_LONGITUDE = 300
+
+
+def _real_url(value):
+    """`value` if it looks like an http(s) URL, else "" - typed links are
+    sometimes internal paths or plain descriptions."""
+    value = (value or "").strip()
+    return value if value.lower().startswith(("http://", "https://")) else ""
 
 
 class BoundaryType(models.TextChoices):
@@ -256,11 +272,14 @@ class BoundaryType(models.TextChoices):
 class CoreMetadata(models.Model):
     """Mandatory metadata present on EVERY record, regardless of template.
 
-    Modelled on MEDIN. These are real columns, so they are always enforced by
-    the database, searchable, and editable in the admin. Values that belong to
-    a controlled list (contact, country, CRS, publisher, topic, keywords,
-    spatial representation type) are foreign keys to their own models rather
-    than free text, so they stay consistent across records.
+    Modelled on MEDIN. Only fields with behaviour behind them are columns
+    (title, lookups, boundary/map, temporal extent, access constraints, the
+    link-or-upload fields, metadata date); plain text fields are ordinary
+    template fields kept in the record's `data` (see STANDARD_FIELDS).
+    Values that belong to a controlled list (contact, country, CRS,
+    publisher, topic, keywords, spatial representation type) are foreign
+    keys to their own models rather than free text, so they stay consistent
+    across records.
 
     Geographic bounds and the bounds' CRS name default to the related
     `country`'s, but a record can override them with its own precise
@@ -270,21 +289,28 @@ class CoreMetadata(models.Model):
     resolution.
     """
 
-    title = models.CharField(max_length=500)
-    abstract = models.TextField()
+    # Every column is optional at the database level - which ones a record
+    # must fill in is up to its template's built-in rows (BUILTIN_FIELDS).
+    title = models.CharField(
+        max_length=500, blank=True,
+        help_text="Date, organisation, location and survey type. Expand acronyms.",
+    )
     contact = models.ForeignKey(
         Contact,
         related_name="%(class)ss",
         on_delete=models.PROTECT,
-        help_text="Person to contact about this record",
+        null=True,
+        blank=True,
+        help_text="Metadata point of contact - organisation name and email at minimum.",
     )
-    language = models.CharField(max_length=100, default="English")
-    version = models.CharField(max_length=50, default="1.0.0")
     country = models.ForeignKey(
         Country,
         related_name="%(class)ss",
         on_delete=models.PROTECT,
-        help_text="Supplies the geographic bounding box and its CRS name, unless overridden below",
+        null=True,
+        blank=True,
+        help_text="Named area: ISO 3166 country, e.g. Tuvalu. Supplies the "
+        "bounding box and its CRS name unless overridden below.",
     )
     boundary_type = models.CharField(
         max_length=10,
@@ -317,16 +343,32 @@ class CoreMetadata(models.Model):
         CoordinateReferenceSystem,
         related_name="%(class)ss",
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        help_text="Spatial reference system as an EPSG code, e.g. EPSG:4326 (WGS84).",
     )
     publisher = models.ForeignKey(
-        Publisher, related_name="%(class)ss", on_delete=models.PROTECT
+        Publisher, related_name="%(class)ss", on_delete=models.PROTECT,
+        null=True, blank=True,
+        help_text="Distributor - the organisation that distributes the data.",
     )
-    topic = models.ForeignKey(Topic, related_name="%(class)ss", on_delete=models.PROTECT)
-    keywords = models.ManyToManyField(Keyword, related_name="%(class)ss", blank=True)
+    topic = models.ForeignKey(
+        Topic, related_name="%(class)ss", on_delete=models.PROTECT,
+        null=True, blank=True,
+        help_text="ISO topic category, e.g. oceans, elevation, "
+        "climatologyMeteorologyAtmosphere.",
+    )
+    keywords = models.ManyToManyField(
+        Keyword, related_name="%(class)ss", blank=True,
+        help_text="Vocabulary terms describing the data.",
+    )
     access_constraints = models.CharField(
         max_length=20,
         choices=AccessConstraints.choices,
         default=AccessConstraints.PRIVATE,
+        blank=True,
+        help_text="Limitations on public access. A private record's Link to "
+        "data is left out of the search index.",
     )
     # Elasticsearch field sources (same paths as ElasticsearchFieldMap.source)
     # to withhold from this record's search-index document while it's private.
@@ -336,21 +378,26 @@ class CoreMetadata(models.Model):
         help_text="Fields left out of the search index (pygeoapi) while this "
         "record's access constraint is private.",
     )
-    license =models.CharField(max_length=255, default="Other (Not Open)")
-    temporal_coverage_from = models.DateField(null=True, blank=True)
-    temporal_coverage_to = models.DateField(
-        null=True, blank=True, help_text="Leave empty if coverage is ongoing"
+    temporal_coverage_from = models.DateField(
+        null=True, blank=True, help_text="Start of data collection."
     )
-    metadata_standard_name = models.CharField(max_length=100, default="MEDIN")
-    metadata_standard_version = models.CharField(max_length=50, default="3.1.2")
-    metadata_standard_language = models.CharField(max_length=100, default="English")
-    update_frequency = models.CharField(max_length=255, blank=True)
-    lineage = models.TextField(default="none")
-    data_format = models.CharField(max_length=100, default="GIS")
+    temporal_coverage_to = models.DateField(
+        null=True, blank=True,
+        help_text="End of data collection - fill in if known; leave empty if "
+        "collection is ongoing.",
+    )
+    metadata_date = models.DateField(
+        auto_now=True, null=True,
+        help_text="Date this record was last saved (yyyy-mm-dd). System-filled "
+        "on every save.",
+    )
     spatial_representation_type = models.ForeignKey(
         SpatialRepresentationType,
         related_name="%(class)ss",
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        help_text="e.g. vector, grid, textTable, tin, stereoModel, video.",
     )
     data_type = models.ForeignKey(
         DataType,
@@ -358,6 +405,7 @@ class CoreMetadata(models.Model):
         on_delete=models.PROTECT,
         null=True,
         blank=True,
+        help_text="Resource type (ISO scope code): dataset, series or service.",
     )
     project = models.ForeignKey(
         Project,
@@ -365,7 +413,7 @@ class CoreMetadata(models.Model):
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        help_text="Project this record is attributed to, if any",
+        help_text="Parent project or series this record belongs to.",
     )
     metadata_type = models.ForeignKey(
         MetadataType,
@@ -377,30 +425,42 @@ class CoreMetadata(models.Model):
     )
 
     # --- Fields ported from the legacy backend's flat Metadata table ---
-    comment = models.TextField(blank=True)
-    link_to_data = models.TextField(blank=True)
-    acknowledgement = models.TextField(blank=True)
-    history = models.TextField(blank=True)
-    fundings = models.TextField(blank=True)
-    references = models.TextField(blank=True)
-    acquisition_report_file = models.FileField(
-        upload_to="acquisition_reports/", null=True, blank=True
+    link_to_data = models.TextField(
+        blank=True,
+        help_text="Needed when the data is available online: one authoritative "
+        "link - a DOI or landing page preferred, otherwise the main download. "
+        "Use the HTTPS form for public S3 objects, never presigned URLs.",
     )
-    project_report_link = models.TextField(blank=True)
-    factsheet = models.TextField(blank=True)
-    attribute = models.TextField(blank=True)
+    acquisition_report_link = models.TextField(
+        blank=True, help_text="Link (URL) to the field, flight or deployment "
+        "acquisition report.",
+    )
+    acquisition_report_file = models.FileField(
+        upload_to="acquisition_reports/", null=True, blank=True,
+        help_text="Field, flight or deployment acquisition report.",
+    )
+    project_report_link = models.TextField(
+        blank=True, help_text="Link (URL) to the project report."
+    )
+    project_report_file = models.FileField(
+        upload_to="project_reports/", null=True, blank=True,
+        help_text="The project report.",
+    )
     additional_information = models.TextField(
-        blank=True, help_text="A supplementary document/report link for this record"
+        blank=True, help_text="Anything not covered by other fields."
     )
     additional_information_file = models.FileField(
         upload_to="additional_information/", null=True, blank=True,
-        help_text="Upload instead of (or in addition to) a link above - the "
-        "upload wins if both are set",
+        help_text="Supporting file not covered elsewhere - the upload wins if "
+        "Additional information above is also set.",
     )
 
     # --- Uploaded file ---
-    file = models.FileField(upload_to="metadata_files/", null=True, blank=True)
-    file_description = models.TextField(blank=True)
+    file = models.FileField(
+        upload_to="metadata_files/", null=True, blank=True,
+        help_text="Data file published through the tool.",
+    )
+    file_description = models.TextField(blank=True, help_text="What the file contains.")
 
     class Meta:
         abstract = True
@@ -454,7 +514,7 @@ class CoreMetadata(models.Model):
         bounds = self.custom_bounds
         if bounds is not None:
             return bounds[index]
-        return getattr(self.country, country_attr)
+        return getattr(self.country, country_attr, None)  # no country: None
 
     @property
     def west_bound_longitude(self):
@@ -474,7 +534,7 @@ class CoreMetadata(models.Model):
 
     @property
     def crs_name(self):
-        return self.country.crs_name
+        return self.country.crs_name if self.country else None
 
     @property
     def access_constraints_label(self):
@@ -485,12 +545,13 @@ class CoreMetadata(models.Model):
 
     @property
     def acquisition_report_url(self):
-        """Absolute download link for the uploaded `acquisition_report_file` -
-        its own `.url` is MEDIA_URL-relative, not reachable as-is from an
-        Elasticsearch/pygeoapi consumer."""
-        if not self.acquisition_report_file:
-            return ""
-        return f"{settings.BACKEND_URL}{self.acquisition_report_file.url}"
+        """Absolute download link for the uploaded `acquisition_report_file`
+        (its own `.url` is MEDIA_URL-relative, not reachable as-is from an
+        Elasticsearch/pygeoapi consumer), else `acquisition_report_link` when
+        it's a real URL."""
+        if self.acquisition_report_file:
+            return f"{settings.BACKEND_URL}{self.acquisition_report_file.url}"
+        return _real_url(self.acquisition_report_link)
 
     @property
     def additional_information_value(self):
@@ -514,16 +575,16 @@ class CoreMetadata(models.Model):
         """`link_to_data` as typed in is often an internal file-share path
         (e.g. "S:/GEM/FJ_NAB/...") rather than a real URL - only surface it
         to pygeoapi/Elasticsearch when it actually looks like one."""
-        value = self.link_to_data.strip()
-        return value if value.lower().startswith(("http://", "https://")) else ""
+        return _real_url(self.link_to_data)
 
     @property
     def project_report_url(self):
-        """Same rule as `link_to_data_url` - project_report_link sometimes
-        holds a plain description (e.g. "World Bank Document") instead of an
-        actual link."""
-        value = self.project_report_link.strip()
-        return value if value.lower().startswith(("http://", "https://")) else ""
+        """Absolute link for the uploaded `project_report_file`, else
+        `project_report_link` when it's a real URL - it sometimes holds a
+        plain description (e.g. "World Bank Document") instead."""
+        if self.project_report_file:
+            return f"{settings.BACKEND_URL}{self.project_report_file.url}"
+        return _real_url(self.project_report_link)
 
     @property
     def geojson_geometry(self):
@@ -632,8 +693,338 @@ class MetadataTemplate(TimeStampedModel):
         super().save(*args, **kwargs)
 
 
+class FormSection(models.Model):
+    """A titled section of the record form (Identification, Classification,
+    ...), managed in the admin. A template field picks one; fields with none
+    show under "Template fields"."""
+
+    name = models.CharField(max_length=255, unique=True)
+    slug = models.SlugField(
+        max_length=100, unique=True,
+        help_text="Built-in fields start in the section with their default "
+        "slug (see BUILTIN_FIELD_SECTIONS) - changing it means new templates "
+        "put those fields under Template fields instead.",
+    )
+    order = models.PositiveIntegerField(
+        default=0, help_text="Sections are shown lowest first"
+    )
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self):
+        return self.name
+
+
+# The built-in (column-backed) record fields a template lists among its own
+# fields, in default order, as (row name, default label, record form fields
+# the row covers) - only the ones with behaviour a plain field can't give
+# (lookups, map, privacy, link-or-upload, auto-filled). Deleting a row hides
+# those fields on the template's records - their columns keep their
+# defaults. "template" and "metadata_type" always show, so aren't listed.
+BUILTIN_FIELDS = [
+    ("title", "Title", ["title"]),
+    ("data_type", "Data type", ["data_type"]),
+    ("project", "Project", ["project"]),
+    ("topic", "Topic", ["topic"]),
+    ("keywords", "Keywords", ["keywords"]),
+    ("contact", "Contact", ["contact"]),
+    ("publisher", "Publisher", ["publisher"]),
+    ("country", "Country", ["country"]),
+    ("boundary", "Boundary", [
+        "boundary_type",
+        "west_bounding_longitude",
+        "east_bounding_longitude",
+        "south_bounding_latitude",
+        "north_bounding_latitude",
+        "boundary_polygon",
+    ]),
+    ("temporal_coverage_from", "Temporal coverage from", ["temporal_coverage_from"]),
+    ("temporal_coverage_to", "Temporal coverage to", ["temporal_coverage_to"]),
+    ("coordinate_reference_system", "Coordinate reference system", ["coordinate_reference_system"]),
+    ("spatial_representation_type", "Spatial representation type", ["spatial_representation_type"]),
+    # "hidden_when_private" is left out while private records hide a fixed
+    # set (PRIVATE_HIDDEN_SOURCES) - add it back here to show its picker.
+    ("access_constraints", "Access constraints", ["access_constraints"]),
+    ("link_to_data", "Link to data", ["link_to_data_source", "link_to_data", "file", "file_description"]),
+    ("additional_information", "Additional information", ["additional_information"]),
+    ("acquisition_report_file", "Acquisition report", [
+        "acquisition_report_source", "acquisition_report_link", "acquisition_report_file",
+    ]),
+    ("project_report_link", "Project report", [
+        "project_report_source", "project_report_link", "project_report_file",
+    ]),
+    ("additional_information_file", "Additional information file", ["additional_information_file"]),
+    ("metadata_date", "Metadata date", ["metadata_date"]),
+]
+BUILTIN_FIELD_MEMBERS = {name: members for name, _, members in BUILTIN_FIELDS}
+
+# The MEDIN fields that are plain values: every new template starts with them
+# as ordinary (non built-in) fields, stored in the record's `data` and
+# editable like any custom field - type, choices, default included. As
+# (name, label, field type, help text, default, choices).
+UPDATE_FREQUENCY_CHOICES = [
+    "continual", "daily", "weekly", "fortnightly", "monthly", "quarterly",
+    "biannually", "annually", "asNeeded", "irregular", "notPlanned", "unknown",
+]
+PROTOCOL_CHOICES = [
+    "HTTPS", "HTTP", "FTP", "SFTP", "SMB", "S3", "OPeNDAP", "THREDDS", "ERDDAP",
+    "OGC:WMS", "OGC:WMTS", "OGC:WFS", "OGC:WCS", "OGC:API", "DOI",
+]
+STANDARD_FIELDS = [
+    ("abstract", "Abstract", FieldType.TEXTAREA,
+     "At least 100 characters; must not repeat the title.", None, []),
+    ("resource_identifier", "Unique resource identifier", FieldType.TEXT,
+     "Organisation code or DOI. Must be unique and contain no spaces.", None, []),
+    ("version", "Version", FieldType.TEXT, "Dataset edition or release number.", "1.0.0", []),
+    ("language", "Language", FieldType.TEXT,
+     "Resource language, as an ISO 639-2 code (e.g. eng).", "English", []),
+    ("originator", "Originator", FieldType.TEXT,
+     "Organisation that collected or produced the data.", "SPC", []),
+    ("custodian", "Custodian", FieldType.TEXT,
+     "Organisation that holds and manages the data.", "SPC", []),
+    ("owner", "Owner", FieldType.TEXT, "Organisation that owns the data.", None, []),
+    ("fundings", "Fundings", FieldType.TEXT,
+     "Funding body and grant or project number.", None, []),
+    ("spatial_resolution", "Spatial resolution", FieldType.TEXT,
+     "Point spacing, pixel size or station spacing in metres - 'Not applicable' "
+     "for single points.", None, []),
+    ("lineage", "Lineage", FieldType.TEXTAREA,
+     "Sources, collection and processing methods, quality control and "
+     "standards followed.", "none", []),
+    ("history", "History", FieldType.TEXT, "Version or processing history.", None, []),
+    ("update_frequency", "Update frequency", FieldType.SELECT,
+     "How often the data is updated.", None, UPDATE_FREQUENCY_CHOICES),
+    ("acknowledgement", "Acknowledgement", FieldType.TEXT,
+     "Required acknowledgement or citation text.", None, []),
+    ("license", "License", FieldType.TEXT, "", "Other (Not Open)", []),
+    ("protocol", "Protocol", FieldType.SELECT,
+     "Needed with a Link to data. Picked from the link (https, ftp, s3) - "
+     "change it for services such as OPeNDAP, WMS, WFS, THREDDS.", None, PROTOCOL_CHOICES),
+    ("data_format", "Data format", FieldType.TEXT, "e.g. NetCDF, CSV, GeoTIFF, LAS.", "GIS", []),
+    ("attribute", "Attribute", FieldType.TEXT,
+     "Variables: name, units and description (CF standard name for ocean data).", None, []),
+    ("references", "References", FieldType.TEXTAREA,
+     "Related publications (citation or DOI).", None, []),
+    ("comment", "Comment", FieldType.TEXTAREA, "General remarks.", None, []),
+    ("factsheet", "Factsheet", FieldType.TEXTAREA, "Summary factsheet for the dataset.", None, []),
+    ("metadata_standard_name", "Metadata standard name", FieldType.TEXT, "", "MEDIN", []),
+    ("metadata_standard_version", "Metadata standard version", FieldType.TEXT, "", "3.1.2", []),
+    ("metadata_standard_language", "Metadata standard language", FieldType.TEXT,
+     "Language of this metadata record.", "English", []),
+    ("character_encoding", "Character encoding", FieldType.TEXT,
+     "Character encoding of the data, e.g. utf8.", "utf8", []),
+]
+
+# Built-in columns the system fills in itself (auto_now): shown read-only on
+# the record form, never typed in, so never "required" either.
+AUTO_BUILTIN_MEMBERS = {"metadata_date"}
+
+# Built-in fields entered as either a typed link or an uploaded file, as
+# (form-only radio picking which, link column, file column, columns cleared
+# along with the file). The record keeps only the picked one.
+LINK_OR_FILE_FIELDS = [
+    ("link_to_data_source", "link_to_data", "file", ["file_description"]),
+    ("acquisition_report_source", "acquisition_report_link", "acquisition_report_file", []),
+    ("project_report_source", "project_report_link", "project_report_file", []),
+]
+LINK_OR_FILE_RADIOS = {radio for radio, *_ in LINK_OR_FILE_FIELDS}
+
+# The section (FormSection slug) each built-in and standard field starts in,
+# as in the
+# Dataset Metadata Template. The LiDAR fields (its Part B) go under
+# Supporting documentation, since they export into MEDIN Additional
+# information. A slug with no section leaves the field under Template fields.
+BUILTIN_FIELD_SECTIONS = {
+    "title": "identification",
+    "abstract": "identification",
+    "resource_identifier": "identification",
+    "data_type": "identification",
+    "version": "identification",
+    "language": "identification",
+    "project": "identification",
+    "topic": "classification",
+    "keywords": "classification",
+    "contact": "responsible_parties",
+    "publisher": "responsible_parties",
+    "originator": "responsible_parties",
+    "custodian": "responsible_parties",
+    "owner": "responsible_parties",
+    "fundings": "responsible_parties",
+    "country": "spatial_extent",
+    "boundary": "spatial_extent",
+    "temporal_coverage_from": "temporal_extent",
+    "temporal_coverage_to": "temporal_extent",
+    "coordinate_reference_system": "spatial_reference",
+    "spatial_representation_type": "spatial_reference",
+    "spatial_resolution": "spatial_reference",
+    "lineage": "quality_and_lineage",
+    "history": "quality_and_lineage",
+    "update_frequency": "quality_and_lineage",
+    "access_constraints": "constraints",
+    "acknowledgement": "constraints",
+    "license": "constraints",
+    "link_to_data": "distribution",
+    "protocol": "distribution",
+    "data_format": "distribution",
+    "attribute": "content_description",
+    "references": "supporting_documentation",
+    "additional_information": "supporting_documentation",
+    "comment": "supporting_documentation",
+    "acquisition_report_file": "supporting_documentation",
+    "project_report_link": "supporting_documentation",
+    "factsheet": "supporting_documentation",
+    "additional_information_file": "supporting_documentation",
+    "metadata_standard_name": "metadata_record",
+    "metadata_standard_version": "metadata_record",
+    "metadata_standard_language": "metadata_record",
+    "character_encoding": "metadata_record",
+    "metadata_date": "metadata_record",
+}
+
+# Each built-in and standard field's default order: its number (#) in the
+# Dataset Metadata
+# Template, so fields added later can take the unused number (24). Grouped rows take their first field's number (Boundary 17
+# covers 18-21, Link to data 33 covers File 36 and File description 37), the
+# LiDAR fields A1-A4 follow on as 47-50, and License (not in the document)
+# comes last.
+BUILTIN_FIELD_POSITIONS = {
+    "title": 1,
+    "abstract": 2,
+    "resource_identifier": 3,
+    "data_type": 4,
+    "version": 5,
+    "language": 6,
+    "project": 7,
+    "topic": 8,
+    "keywords": 9,
+    "contact": 10,
+    "publisher": 11,
+    "originator": 12,
+    "custodian": 13,
+    "owner": 14,
+    "fundings": 15,
+    "country": 16,
+    "boundary": 17,
+    "temporal_coverage_from": 22,
+    "temporal_coverage_to": 23,
+    "coordinate_reference_system": 25,
+    "spatial_representation_type": 26,
+    "spatial_resolution": 27,
+    "lineage": 28,
+    "history": 29,
+    "update_frequency": 30,
+    "access_constraints": 31,
+    "acknowledgement": 32,
+    "link_to_data": 33,
+    "protocol": 34,
+    "data_format": 35,
+    "attribute": 38,
+    "references": 39,
+    "additional_information": 40,
+    "comment": 41,
+    "metadata_standard_name": 42,
+    "metadata_standard_version": 43,
+    "metadata_standard_language": 44,
+    "character_encoding": 45,
+    "metadata_date": 46,
+    "acquisition_report_file": 47,
+    "project_report_link": 48,
+    "factsheet": 49,
+    "additional_information_file": 50,
+    "license": 51,
+}
+
+# Built-in and standard rows ticked "required" on a new template (and
+# built-in ones on a record with no template): the Mandatory fields of the Dataset Metadata Template (MEDIN
+# v3.1.2). Its conditional and optional ones start unticked. "license" isn't
+# in that template and stays required as before.
+DEFAULT_REQUIRED_BUILTIN_FIELDS = {
+    "title",
+    "abstract",
+    "resource_identifier",
+    "data_type",
+    "language",
+    "topic",
+    "keywords",
+    "contact",
+    "publisher",
+    "originator",
+    "custodian",
+    "owner",
+    "temporal_coverage_from",
+    "coordinate_reference_system",
+    "spatial_representation_type",
+    "lineage",
+    "update_frequency",
+    "access_constraints",
+    "license",
+    "data_format",
+    "metadata_standard_name",
+    "metadata_standard_version",
+    "metadata_standard_language",
+}
+
+
+def builtin_field_definitions(template):
+    """Unsaved FieldDefinition rows for every built-in field, in order."""
+    sections = {section.slug: section for section in FormSection.objects.all()}
+    return [
+        FieldDefinition(
+            template=template,
+            name=name,
+            label=label,
+            field_type=FieldType.BUILTIN,
+            required=name in DEFAULT_REQUIRED_BUILTIN_FIELDS,
+            section=sections.get(BUILTIN_FIELD_SECTIONS[name]),
+            order=BUILTIN_FIELD_POSITIONS[name],
+        )
+        for name, label, _ in BUILTIN_FIELDS
+    ]
+
+
+def standard_field_definitions(template):
+    """Unsaved FieldDefinition rows for every standard (plain) field."""
+    sections = {section.slug: section for section in FormSection.objects.all()}
+    return [
+        FieldDefinition(
+            template=template,
+            name=name,
+            label=label,
+            field_type=field_type,
+            help_text=help_text,
+            default=default,
+            choices=list(choices),
+            required=name in DEFAULT_REQUIRED_BUILTIN_FIELDS,
+            section=sections.get(BUILTIN_FIELD_SECTIONS[name]),
+            order=BUILTIN_FIELD_POSITIONS[name],
+        )
+        for name, label, field_type, help_text, default, choices in STANDARD_FIELDS
+    ]
+
+
+def default_field_definitions(template):
+    """Every row a new template starts with - built-in and standard - in
+    document order."""
+    rows = builtin_field_definitions(template) + standard_field_definitions(template)
+    return sorted(rows, key=lambda row: row.order)
+
+
+def template_builtin_rows(template):
+    """A template's built-in rows in order - or the defaults for every
+    built-in field when there's no template."""
+    if template is None:
+        return builtin_field_definitions(None)
+    return [fd for fd in template.fields.all() if fd.is_builtin]
+
+
 class FieldDefinition(models.Model):
-    """One field belonging to a template — this defines the form/schema."""
+    """One field belonging to a template- this defines the form/schema.
+
+    A "builtin" row stands for one of the record's own columns (see
+    BUILTIN_FIELDS) rather than a key in `data`: only its label, help text,
+    required flag, section and order apply, and deleting it hides that field.
+    """
 
     template = models.ForeignKey(
         MetadataTemplate, related_name="fields", on_delete=models.CASCADE
@@ -649,6 +1040,12 @@ class FieldDefinition(models.Model):
         default=list, blank=True, help_text="Allowed values for (multi)select fields"
     )
     default = models.JSONField(null=True, blank=True)
+    section = models.ForeignKey(
+        FormSection, related_name="fields", on_delete=models.SET_NULL,
+        null=True, blank=True,
+        help_text="Section of the record form this field is shown in - "
+        "empty for Template fields",
+    )
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
@@ -657,6 +1054,19 @@ class FieldDefinition(models.Model):
 
     def __str__(self):
         return f"{self.template.name}.{self.name}"
+
+    @property
+    def is_builtin(self):
+        return self.field_type == FieldType.BUILTIN
+
+    def clean(self):
+        if self.is_builtin:
+            if self.name not in BUILTIN_FIELD_MEMBERS:
+                raise ValidationError({"name": "Not a built-in field - one of: "
+                    + ", ".join(BUILTIN_FIELD_MEMBERS) + "."})
+        elif self.name in BUILTIN_FIELD_MEMBERS:
+            raise ValidationError({"name": "Reserved for the built-in field of "
+                "the same name - pick another name."})
 
 
 class MetadataRecord(CoreMetadata, TimeStampedModel, LegacyImportedModel):
@@ -708,7 +1118,7 @@ class MetadataRecord(CoreMetadata, TimeStampedModel, LegacyImportedModel):
         ]
 
     def __str__(self):
-        return self.title
+        return self.title or f"Untitled record #{self.pk}"
 
     def clean(self):
         """Validate `data` against the template's field definitions.
@@ -736,18 +1146,15 @@ class MetadataRecord(CoreMetadata, TimeStampedModel, LegacyImportedModel):
 # list; resolve_source() below knows how to read either kind of path.
 RECORD_SOURCE_CHOICES = [
     ("id", "id"),
-    ("template.name", "template — name"),
+    ("template.name", "template- name"),
     ("title", "title"),
-    ("abstract", "abstract"),
-    ("contact.firstname", "contact — firstname"),
-    ("contact.lastname", "contact — lastname"),
-    ("contact.email", "contact — email"),
-    ("contact.position", "contact — position"),
-    ("contact.organization", "contact — organization"),
-    ("language", "language"),
-    ("version", "version"),
-    ("country.short_name", "country — short_name"),
-    ("country.long_name", "country — long_name"),
+    ("contact.firstname", "contact- firstname"),
+    ("contact.lastname", "contact- lastname"),
+    ("contact.email", "contact- email"),
+    ("contact.position", "contact- position"),
+    ("contact.organization", "contact- organization"),
+    ("country.short_name", "country- short_name"),
+    ("country.long_name", "country- long_name"),
     ("west_bound_longitude", "west_bound_longitude"),
     ("east_bound_longitude", "east_bound_longitude"),
     ("south_bound_latitude", "south_bound_latitude"),
@@ -756,22 +1163,16 @@ RECORD_SOURCE_CHOICES = [
     ("crs_name", "crs_name"),
     ("coordinate_reference_system.crs_value", "crs_value"),
     ("coordinate_reference_system.crs_description", "crs_description"),
-    ("publisher.publisher_value", "publisher — publisher_value"),
-    ("publisher.website", "publisher — website"),
-    ("publisher.email", "publisher — email"),
-    ("topic.topic_value", "topic — topic_value"),
-    ("keywords.keyword_value", "keywords — keyword_value (list)"),
+    ("publisher.publisher_value", "publisher- publisher_value"),
+    ("publisher.website", "publisher- website"),
+    ("publisher.email", "publisher- email"),
+    ("topic.topic_value", "topic- topic_value"),
+    ("keywords.keyword_value", "keywords- keyword_value (list)"),
     ("access_constraints", "access_constraints (raw DB value)"),
     ("access_constraints_label", "access_constraints_label (display label)"),
-    ("license", "license"),
     ("temporal_coverage_from", "temporal_coverage_from"),
     ("temporal_coverage_to", "temporal_coverage_to"),
-    ("metadata_standard_name", "metadata_standard_name"),
-    ("metadata_standard_version", "metadata_standard_version"),
-    ("metadata_standard_language", "metadata_standard_language"),
-    ("update_frequency", "update_frequency"),
-    ("lineage", "lineage"),
-    ("data_format", "data_format"),
+    ("metadata_date", "metadata_date (last saved, yyyy-mm-dd)"),
     (
         "spatial_representation_type.spatial_representation_type_value",
         "spatial_representation_type_value",
@@ -779,29 +1180,24 @@ RECORD_SOURCE_CHOICES = [
     ("status", "status"),
     ("created_at", "created_at"),
     ("updated_at", "updated_at"),
-    ("comment", "comment"),
     ("link_to_data", "link_to_data (raw value, may not be a URL)"),
     ("link_to_data_url", "link_to_data_url (blank unless it's a real URL)"),
+    ("acquisition_report_link", "acquisition_report_link (raw value, may not be a URL)"),
     ("acquisition_report_file", "acquisition_report_file (raw storage path)"),
-    ("acquisition_report_url", "acquisition_report_url (absolute download link)"),
+    ("acquisition_report_url", "acquisition_report_url (resolved: upload, else link if a real URL)"),
     ("additional_information", "additional_information (typed link/text)"),
     ("additional_information_file", "additional_information_file (raw storage path)"),
     ("additional_information_value", "additional_information_value (resolved: upload or text)"),
     ("project_report_link", "project_report_link (raw value, may not be a URL)"),
-    ("project_report_url", "project_report_url (blank unless it's a real URL)"),
-    ("factsheet", "factsheet"),
-    ("fundings", "fundings"),
-    ("references", "references"),
-    ("acknowledgement", "acknowledgement"),
-    ("history", "history"),
-    ("attribute", "attribute"),
+    ("project_report_file", "project_report_file (raw storage path)"),
+    ("project_report_url", "project_report_url (resolved: upload, else link if a real URL)"),
     ("file", "file (raw storage path)"),
     ("file_url", "file_url (absolute download link)"),
     ("file_description", "file_description"),
-    ("data_type.data_type_value", "data_type — data_type_value"),
-    ("project.project_name", "project — project_name"),
-    ("project.project_code", "project — project_code"),
-    ("metadata_type.metadata_type_value", "metadata_type — metadata_type_value"),
+    ("data_type.data_type_value", "data_type- data_type_value"),
+    ("project.project_name", "project- project_name"),
+    ("project.project_code", "project- project_code"),
+    ("metadata_type.metadata_type_value", "metadata_type- metadata_type_value"),
 ]
 
 
@@ -811,9 +1207,9 @@ class ElasticsearchIndex(TimeStampedModel):
     One index per `MetadataType` (enforced by the one-to-one below) - e.g.
     "Oceanography" records go to the `oceanography` index, "Drone" records
     to `drone`, each its own pygeoapi collection. A record is only ever
-    pushed with the fields listed in `fields` — nothing else leaves the
-    database. Only core record fields can be listed; values a record holds
-    for its template's fields (`data`) are never sent.
+    pushed with the fields listed in `fields`- nothing else leaves the
+    database. Both core record fields and the template's own fields
+    (`data.<name>`) can be listed.
     """
 
     name = models.CharField(max_length=255, unique=True, help_text="Internal label")
@@ -861,7 +1257,8 @@ class ElasticsearchIndex(TimeStampedModel):
         geometry = record.geojson_geometry
 
         is_open = record.access_constraints == AccessConstraints.OPEN
-        hidden = set() if is_open else set(record.hidden_when_private or [])
+        hidden = set() if is_open else PRIVATE_HIDDEN_SOURCES
+        # hidden = set() if is_open else set(record.hidden_when_private or [])
         properties = {}
         for field in self.fields.filter(is_enabled=True).order_by("order", "id"):
             if field.source in hidden:
@@ -1038,7 +1435,7 @@ def validate_record_data(template, data):
     if not isinstance(data, dict):
         return {"__all__": "Data must be an object mapping field names to values."}
 
-    field_defs = {f.name: f for f in template.fields.all()}
+    field_defs = {f.name: f for f in template.fields.all() if not f.is_builtin}
 
     # Reject values that don't correspond to any field on the template.
     for key in data:
