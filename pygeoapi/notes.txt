@@ -153,3 +153,5 @@ cd /mnt/c/Code/new_new_dms/backend; source .venv/bin/activate;  python manage.py
 docker image prune -a
 docker container prune
 docker builder prune
+
+
