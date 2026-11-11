@@ -155,3 +155,22 @@ docker container prune
 docker builder prune
 
 
+In mac
+===
+# 1 – Elasticsearch
+cd ~/medin-dms/elasticsearch && docker-compose -f docker-compose-local.yml up
+
+# 2 – pygeoapi
+cd ~/medin-dms/pygeoapi && source .venv/bin/activate && python main.py
+
+# 3 – frontend
+cd ~/medin-dms/frontend && npm run dev
+
+# 4 – backend
+cd ~/medin-dms/backend && source .venv/bin/activate && python manage.py runserver 0.0.0.0:8000
+
+cd ~/medin-dms
+docker-compose -f docker-compose-local.yml up -d --build database
+
+====
+
