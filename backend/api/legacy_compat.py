@@ -111,7 +111,7 @@ def legacy_metadata_dict(record):
         "contact_position": contact.position if contact else None,
         "contact_email": contact.email if contact else None,
         "publisher_id": record.publisher_id,
-        "publisher_value": publisher.publisher_value if publisher else None,
+        "publisher_value": publisher.name if publisher else None,
         "publisher_website": publisher.website if publisher else None,
         "publisher_email": publisher.email if publisher else None,
         "topic_id": record.topic_id,

@@ -10,7 +10,6 @@ from django.utils.html import format_html
 from .elasticsearch_sync import resync_records_for
 from .pygeoapi_sync import item_url
 from .forms import (
-    CORE_FIELDS,
     DYNAMIC_PREFIX,
     MetadataRecordAdminForm,
     build_form_field,
@@ -34,14 +33,15 @@ from .models import (
     MetadataRecord,
     MetadataTemplate,
     MetadataType,
+    Organisation,
     Project,
-    Publisher,
     RECORD_SOURCE_CHOICES,
     SpatialRepresentationType,
     Topic,
     DEFAULT_FIELD_NAMES,
     OPTIONAL_BUILTIN_FIELDS,
     utc_timestamp,
+    default_organisation,
     ensure_default_fields,
     template_builtin_rows,
 )
@@ -73,8 +73,15 @@ class ProjectAdmin(admin.ModelAdmin):
 
 @admin.register(Contact)
 class ContactAdmin(admin.ModelAdmin):
-    list_display = ["lastname", "firstname", "email", "position", "organization"]
+    list_display = ["lastname", "firstname", "email", "position", "organization", "organisation_names"]
     search_fields = ["firstname", "lastname", "email", "organization"]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("organisations")
+
+    @admin.display(description="Organisations")
+    def organisation_names(self, obj):
+        return ", ".join(o.name for o in obj.organisations.all())
 
 
 @admin.register(Country)
@@ -97,10 +104,18 @@ class CoordinateReferenceSystemAdmin(admin.ModelAdmin):
     search_fields = ["crs_value", "crs_description"]
 
 
-@admin.register(Publisher)
-class PublisherAdmin(admin.ModelAdmin):
-    list_display = ["publisher_value", "website", "email"]
-    search_fields = ["publisher_value"]
+@admin.register(Organisation)
+class OrganisationAdmin(admin.ModelAdmin):
+    list_display = ["name", "website", "email", "contact_count"]
+    search_fields = ["name"]
+    filter_horizontal = ["contacts"]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("contacts")
+
+    @admin.display(description="Contacts")
+    def contact_count(self, obj):
+        return len(obj.contacts.all())
 
 
 @admin.register(Topic)
@@ -334,6 +349,9 @@ class MetadataRecordAdmin(admin.ModelAdmin):
         "country",
         "coordinate_reference_system",
         "publisher",
+        "originator",
+        "custodian",
+        "data_owner",
         "topic",
         "spatial_representation_type",
         "data_type",
@@ -375,10 +393,8 @@ class MetadataRecordAdmin(admin.ModelAdmin):
         return None
 
     def _core_fields(self, template):
-        """The record's column fields to show: all of them until a template
-        is picked, then just the ones its built-in rows list."""
-        if template is None:
-            return CORE_FIELDS
+        """The record's column fields to show: the ones the template's
+        built-in rows list (the default ones until a template is picked)."""
         return ["template", "metadata_type"] + [
             member
             for fd in template_builtin_rows(template)
@@ -386,11 +402,16 @@ class MetadataRecordAdmin(admin.ModelAdmin):
         ]
 
     def get_changeform_initial_data(self, request):
-        """Keep the dropdown showing the template picked via ?template."""
+        """Keep the dropdown showing the template picked via ?template, and
+        start originator and custodian as SPC."""
         initial = super().get_changeform_initial_data(request)
         tid = request.GET.get("template")
         if tid:
             initial["template"] = tid
+        spc = default_organisation()
+        if spc is not None:
+            initial.setdefault("originator", spc.pk)
+            initial.setdefault("custodian", spc.pk)
         return initial
 
     def get_form(self, request, obj=None, change=False, **kwargs):

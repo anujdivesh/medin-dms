@@ -16,7 +16,7 @@ from .models import (
     MetadataTemplate,
     MetadataType,
     Project,
-    Publisher,
+    Organisation,
     SpatialRepresentationType,
     Topic,
     AUTO_BUILTIN_MEMBERS,
@@ -28,7 +28,7 @@ from .models import (
 )
 
 
-# Read-only aliases below (e.g. `value = ...source="publisher_value"`) exist
+# Read-only aliases below (e.g. `value = ...source="name"`) exist
 # solely so the frontend's existing lookup admin pages (src/pages/*.jsx),
 # which render legacy's field names, keep working unmodified when pointed at
 # Django - see LegacyListEnvelopeMixin in legacy_compat.py for the matching
@@ -81,12 +81,18 @@ class CoordinateReferenceSystemSerializer(serializers.ModelSerializer):
         fields = ["id", "crs_value", "crs_description", "value", "description", "created_at", "updated_at"]
 
 
-class PublisherSerializer(serializers.ModelSerializer):
-    value = serializers.CharField(source="publisher_value", read_only=True)
+class OrganisationSerializer(serializers.ModelSerializer):
+    value = serializers.CharField(source="name", read_only=True)
+    # Legacy's name for the field, for /api/publishers callers.
+    publisher_value = serializers.CharField(source="name", read_only=True)
+    contacts_detail = ContactSerializer(source="contacts", many=True, read_only=True)
 
     class Meta:
-        model = Publisher
-        fields = ["id", "publisher_value", "value", "website", "email", "created_at", "updated_at"]
+        model = Organisation
+        fields = [
+            "id", "name", "value", "publisher_value", "website", "email",
+            "contacts", "contacts_detail", "created_at", "updated_at",
+        ]
 
 
 class TopicSerializer(serializers.ModelSerializer):
@@ -230,7 +236,10 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
     coordinate_reference_system_detail = CoordinateReferenceSystemSerializer(
         source="coordinate_reference_system", read_only=True
     )
-    publisher_detail = PublisherSerializer(source="publisher", read_only=True)
+    publisher_detail = OrganisationSerializer(source="publisher", read_only=True)
+    originator_detail = OrganisationSerializer(source="originator", read_only=True)
+    custodian_detail = OrganisationSerializer(source="custodian", read_only=True)
+    data_owner_detail = OrganisationSerializer(source="data_owner", read_only=True)
     topic_detail = TopicSerializer(source="topic", read_only=True)
     keywords_detail = KeywordSerializer(source="keywords", many=True, read_only=True)
     spatial_representation_type_detail = SpatialRepresentationTypeSerializer(
@@ -293,6 +302,12 @@ class MetadataRecordSerializer(serializers.ModelSerializer):
             "crs_description",
             "publisher",
             "publisher_detail",
+            "originator",
+            "originator_detail",
+            "custodian",
+            "custodian_detail",
+            "data_owner",
+            "data_owner_detail",
             "topic",
             "topic_detail",
             "keywords",
