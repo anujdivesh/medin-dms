@@ -119,18 +119,29 @@ class CoordinateReferenceSystem(LegacyImportedModel, LegacyLookupTimestamps):
         return self.crs_value
 
 
-class Publisher(LegacyImportedModel, LegacyLookupTimestamps):
-    """An organisation that publishes records."""
+class Organisation(LegacyImportedModel, LegacyLookupTimestamps):
+    """An organisation - a record's publisher, originator, custodian or
+    owner. (Legacy's "publisher" table.)"""
 
-    publisher_value = models.CharField(max_length=255, unique=True)
+    name = models.CharField(max_length=255, unique=True)
     website = models.URLField(blank=True)
     email = models.EmailField(blank=True)
+    contacts = models.ManyToManyField(
+        Contact, related_name="organisations", blank=True,
+        help_text="People to contact about this organisation's data, e.g. for data requests.",
+    )
 
     class Meta:
-        ordering = ["publisher_value"]
+        ordering = ["name"]
 
     def __str__(self):
-        return self.publisher_value
+        return self.name
+
+
+def default_organisation():
+    """The SPC organisation - what a new record's originator and custodian
+    start as - or None if there's no such organisation."""
+    return Organisation.objects.filter(name__contains="(SPC)").first()
 
 
 class Topic(LegacyImportedModel, LegacyLookupTimestamps):
@@ -349,9 +360,25 @@ class CoreMetadata(models.Model):
         help_text="Spatial reference system as an EPSG code, e.g. EPSG:4326 (WGS84).",
     )
     publisher = models.ForeignKey(
-        Publisher, related_name="%(class)ss", on_delete=models.PROTECT,
+        Organisation, related_name="%(class)ss", on_delete=models.PROTECT,
         null=True, blank=True,
         help_text="Distributor - the organisation that distributes the data.",
+    )
+    originator = models.ForeignKey(
+        Organisation, related_name="originated_%(class)ss", on_delete=models.PROTECT,
+        null=True, blank=True,
+        help_text="Organisation that collected or produced the data.",
+    )
+    custodian = models.ForeignKey(
+        Organisation, related_name="custodian_of_%(class)ss", on_delete=models.PROTECT,
+        null=True, blank=True,
+        help_text="Organisation that holds and manages the data.",
+    )
+    # Not "owner" - MetadataRecord.owner is the user who created the record.
+    data_owner = models.ForeignKey(
+        Organisation, related_name="owned_%(class)ss", on_delete=models.PROTECT,
+        null=True, blank=True,
+        help_text="Organisation that owns the data.",
     )
     topic = models.ForeignKey(
         Topic, related_name="%(class)ss", on_delete=models.PROTECT,
@@ -731,6 +758,9 @@ BUILTIN_FIELDS = [
     ("keywords", "Keywords", ["keywords"]),
     ("contact", "Contact", ["contact"]),
     ("publisher", "Publisher", ["publisher"]),
+    ("originator", "Originator", ["originator"]),
+    ("custodian", "Custodian", ["custodian"]),
+    ("owner", "Owner", ["data_owner"]),
     ("country", "Country", ["country"]),
     ("boundary", "Boundary", [
         "boundary_type",
@@ -780,11 +810,6 @@ STANDARD_FIELDS = [
     ("version", "Version", FieldType.TEXT, "Dataset edition or release number.", "1.0.0", []),
     ("language", "Language", FieldType.TEXT,
      "Resource language, as an ISO 639-2 code (e.g. eng).", "English", []),
-    ("originator", "Originator", FieldType.TEXT,
-     "Organisation that collected or produced the data.", "SPC", []),
-    ("custodian", "Custodian", FieldType.TEXT,
-     "Organisation that holds and manages the data.", "SPC", []),
-    ("owner", "Owner", FieldType.TEXT, "Organisation that owns the data.", None, []),
     ("fundings", "Fundings", FieldType.TEXT,
      "Funding body and grant or project number.", None, []),
     ("spatial_resolution", "Spatial resolution", FieldType.TEXT,
@@ -1045,10 +1070,14 @@ def ensure_default_fields(template):
 
 
 def template_builtin_rows(template):
-    """A template's built-in rows in order - or the defaults for every
-    built-in field when there's no template."""
+    """A template's built-in rows in order - or, when there's no template,
+    the defaults for the default built-in fields only (the optional ones,
+    like the LiDAR reports, appear once a template that has them is picked)."""
     if template is None:
-        return builtin_field_definitions(None)
+        return [
+            fd for fd in builtin_field_definitions(None)
+            if fd.name in DEFAULT_FIELD_NAMES
+        ]
     return [fd for fd in template.fields.all() if fd.is_builtin]
 
 
@@ -1208,9 +1237,12 @@ RECORD_SOURCE_CHOICES = [
     ("crs_name", "crs_name"),
     ("coordinate_reference_system.crs_value", "crs_value"),
     ("coordinate_reference_system.crs_description", "crs_description"),
-    ("publisher.publisher_value", "publisher- publisher_value"),
+    ("publisher.name", "publisher- name"),
     ("publisher.website", "publisher- website"),
     ("publisher.email", "publisher- email"),
+    ("originator.name", "originator- name"),
+    ("custodian.name", "custodian- name"),
+    ("data_owner.name", "owner- name"),
     ("topic.topic_value", "topic- topic_value"),
     ("keywords.keyword_value", "keywords- keyword_value (list)"),
     ("access_constraints", "access_constraints (raw DB value)"),
@@ -1516,10 +1548,10 @@ DOCUMENT_INDEX_FIELDS = [
         ("contact.organization", "contact_organization", "text"),
         ("contact.email", "contact_email", "keyword"),
     ]),
-    ("publisher", [("publisher.publisher_value", "publisher_value", "keyword")]),
-    ("originator", [("data.originator", "originator", "text")]),
-    ("custodian", [("data.custodian", "custodian", "text")]),
-    ("owner", [("data.owner", "owner", "text")]),
+    ("publisher", [("publisher.name", "publisher_value", "keyword")]),
+    ("originator", [("originator.name", "originator", "text")]),
+    ("custodian", [("custodian.name", "custodian", "text")]),
+    ("owner", [("data_owner.name", "owner", "text")]),
     ("fundings", [("data.fundings", "fundings", "text")]),
     ("country", [("country.long_name", "country_long_name", "keyword")]),
     ("west_bound", [("west_bound_longitude", "west_bounding_longitude", "float")]),

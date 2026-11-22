@@ -22,7 +22,7 @@ from .models import (
     MetadataTemplate,
     MetadataType,
     Project,
-    Publisher,
+    Organisation,
     SpatialRepresentationType,
     Topic,
 )
@@ -37,7 +37,7 @@ from .serializers import (
     MetadataTemplateSerializer,
     MetadataTypeSerializer,
     ProjectSerializer,
-    PublisherSerializer,
+    OrganisationSerializer,
     SpatialRepresentationTypeSerializer,
     TopicSerializer,
 )
@@ -95,9 +95,16 @@ class CoordinateReferenceSystemViewSet(LegacyListEnvelopeMixin, viewsets.ModelVi
     legacy_data_key = "coordinate_reference_systems"
 
 
-class PublisherViewSet(LegacyListEnvelopeMixin, viewsets.ModelViewSet):
-    queryset = Publisher.objects.all()
-    serializer_class = PublisherSerializer
+class OrganisationViewSet(LegacyListEnvelopeMixin, viewsets.ModelViewSet):
+    queryset = Organisation.objects.prefetch_related("contacts")
+    serializer_class = OrganisationSerializer
+    legacy_data_key = "organisations"
+
+
+class PublisherViewSet(OrganisationViewSet):
+    """Legacy's /publishers route - the same organisations, in legacy's
+    envelope key."""
+
     legacy_data_key = "publishers"
 
 
@@ -171,6 +178,9 @@ class MetadataRecordViewSet(LegacyMetadataListMixin, viewsets.ModelViewSet):
         "country",
         "coordinate_reference_system",
         "publisher",
+        "originator",
+        "custodian",
+        "data_owner",
         "topic",
         "spatial_representation_type",
         "data_type",

@@ -5,6 +5,7 @@ elasticsearch_sync.py so that module stays import-safe (no signal
 side-effects) for use from management commands/tests.
 """
 
+from django.db.models import Q
 from django.db.models.signals import post_delete, post_save
 
 from . import elasticsearch_sync, pygeoapi_sync
@@ -15,7 +16,7 @@ from .models import (
     DataType,
     ElasticsearchIndex,
     MetadataRecord,
-    Publisher,
+    Organisation,
     SpatialRepresentationType,
     Topic,
 )
@@ -33,6 +34,15 @@ def _on_lookup_saved(sender, instance, **kwargs):
     """A referenced lookup changed - re-sync every record that points at it,
     mirroring legacy's updated_columns_send_elastic_search."""
     elasticsearch_sync.resync_records_for(instance.metadatarecords)
+
+
+def _on_organisation_saved(sender, instance, **kwargs):
+    """As _on_lookup_saved, for every record using the organisation in any
+    role - publisher, originator, custodian or owner."""
+    elasticsearch_sync.resync_records_for(MetadataRecord.objects.filter(
+        Q(publisher=instance) | Q(originator=instance)
+        | Q(custodian=instance) | Q(data_owner=instance)
+    ))
 
 
 def _on_elasticsearch_index_changed(sender, instance, **kwargs):
@@ -60,7 +70,6 @@ def connect():
     for model in (
         Contact,
         Country,
-        Publisher,
         Topic,
         SpatialRepresentationType,
         CoordinateReferenceSystem,
@@ -71,3 +80,8 @@ def connect():
             sender=model,
             dispatch_uid=f"api.resync_on_{model.__name__.lower()}_saved",
         )
+    post_save.connect(
+        _on_organisation_saved,
+        sender=Organisation,
+        dispatch_uid="api.resync_on_organisation_saved",
+    )

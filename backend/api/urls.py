@@ -19,6 +19,7 @@ router.register(
     views.CoordinateReferenceSystemViewSet,
     basename="coordinate-reference-system",
 )
+router.register("organisations", views.OrganisationViewSet, basename="organisation")
 router.register("publishers", views.PublisherViewSet, basename="publisher")
 router.register("topics", views.TopicViewSet, basename="topic")
 router.register("keywords", views.KeywordViewSet, basename="keyword")
