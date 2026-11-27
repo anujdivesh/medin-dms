@@ -23,3 +23,11 @@ media/*
 .DS_Store
 .vscode/
 .idea/
+
+# Temporary file shares 
+/share_files/
+
+# Tests 
+tests.py
+test_*.py
+tests/

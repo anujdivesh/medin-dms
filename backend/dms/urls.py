@@ -24,6 +24,9 @@ from django.views.static import serve
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/", include("api.urls")),
+    path("api/", include("accounts.urls")),
+    path("api/", include("datarequests.urls")),
+    path("api/", include("shares.urls")),
 ]
 
 # Deliberately not using django.conf.urls.static.static() here: it returns no

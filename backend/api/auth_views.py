@@ -13,29 +13,25 @@ regardless, which is sufficient for this step.
 """
 
 from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth import logout as django_logout
 from django.utils import timezone
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from accounts.tokens import user_data as _user_data
+
 User = get_user_model()
 
-
-def _user_data(user):
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "is_active": user.is_active,
-        "created_at": user.date_joined,
-        "updated_at": user.date_joined,
-        "last_login": user.last_login,
-    }
+# Registration, Google sign-in, /auth/me and email verification live in the
+# `accounts` app (accounts/views.py), sharing accounts.tokens with this login.
 
 
 @api_view(["POST"])
+@authentication_classes([])  # no session/CSRF - see accounts/views.py
 @permission_classes([AllowAny])
 def login(request):
     identifier = request.data.get("username") or request.POST.get("username")
@@ -46,6 +42,16 @@ def login(request):
     user = None
     if identifier:
         account = User.objects.filter(username=identifier).first() or User.objects.filter(email__iexact=identifier).first()
+        if account and not account.has_usable_password():
+            # Created via "Sign in with Google" and no password set yet -
+            # point them at Google (or the reset link) instead of a generic
+            # "wrong password". `code` lets the frontend show the Google button.
+            return Response({
+                "status": "error",
+                "code": "google_account",
+                "msg": "This account signs in with Google. Use “Sign in with Google”, "
+                       "or set a password via “Forgot password?”.",
+            })
         if account:
             user = authenticate(request, username=account.username, password=password)
 
@@ -71,6 +77,7 @@ def login(request):
 
 
 @api_view(["POST"])
+@authentication_classes([])  # no session/CSRF - see accounts/views.py
 @permission_classes([AllowAny])
 def refresh_token_view(request):
     token_str = request.query_params.get("refresh_token") or request.data.get("refresh_token")
@@ -98,6 +105,10 @@ def refresh_token_view(request):
 
 
 @api_view(["POST"])
+@authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def logout(request):
+    # Also end the Django admin session the SPA may have opened via
+    # /auth/admin-session, so logging out of the site logs out of the admin too.
+    django_logout(request._request)
     return Response({"status": "success", "msg": "Logout successful"})

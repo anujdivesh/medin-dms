@@ -140,7 +140,7 @@ cd C:\Code\new_new_dms\elasticsearch; docker-compose -f docker-compose-local.yml
 wsl -d Ubuntu
 cd /mnt/c/Code/new_new_dms/pygeoapi; source .venv/bin/activate; python main.py
 
-cd C:\Code\new_new_dms\frontend;npm run dev
+cd C:\Code\new_new_dms\frontend; npm run dev
 vite.config.js & C:\Code\dms
 frontend\src\configpiEndpoints.js
 

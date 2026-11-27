@@ -1,0 +1,11 @@
+{% extends "admin/change_list.html" %}
+{% load shares_links %}
+{% comment %}
+Shares are created on the frontend (it has the resumable uploader for very
+large files), so the usual "Add" button is replaced by a link there.
+{% endcomment %}
+
+{% block object-tools-items %}
+  <li><a href="{% frontend_url '/shares' %}" class="addlink">Upload files / new share</a></li>
+  {{ block.super }}
+{% endblock %}

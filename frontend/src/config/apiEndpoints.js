@@ -2,12 +2,55 @@
 // This file contains all API endpoints used throughout the application
 
 export const API_ENDPOINTS = {
-  // Data Request endpoints
+  // Auth (backend: api/auth_views.py for login/refresh/logout, accounts/ for the rest)
+  AUTH: {
+    LOGIN: '/auth/login',
+    REFRESH: '/auth/refresh',
+    LOGOUT: '/auth/logout',
+    REGISTER: '/auth/register',
+    GOOGLE: '/auth/google',
+    MAGIC_LINK: '/auth/magic-link',
+    MAGIC_LINK_REGISTER: '/auth/magic-link/register',
+    ME: '/auth/me',
+    VERIFY_EMAIL: '/auth/verify-email',
+    RESEND_VERIFICATION: '/auth/resend-verification',
+    ADMIN_SESSION: '/auth/admin-session',
+    PASSWORD: '/auth/password',
+    PASSWORD_RESET: '/auth/password-reset',
+    PASSWORD_RESET_CONFIRM: '/auth/password-reset/confirm',
+  },
+
+  // Server-side cart for logged-in users (backend: datarequests/)
+  CART: {
+    BASE: '/cart',
+    ITEM: (recordId) => `/cart/${recordId}`,
+    MERGE: '/cart/merge',
+  },
+
+  // The current user's data requests (backend: datarequests/)
   DATA_REQUESTS: {
     BASE: '/data-requests',
     BY_ID: (id) => `/data-requests/${id}`,
-    CREATE: '/data-requests',
-    UPDATE: (id) => `/data-requests/${id}`,
+    CANCEL: (id) => `/data-requests/${id}/cancel`,
+  },
+
+  // Owner (approver) dashboard (backend: datarequests.views.OwnerRequestItemViewSet)
+  OWNER: {
+    REQUEST_ITEMS: '/owner/request-items',
+    DECISION: (itemId) => `/owner/request-items/${itemId}/decision`,
+    UPLOAD_REQUEST: (itemId) => `/owner/request-items/${itemId}/upload-request`,
+  },
+
+  // Temporary file shares (backend: shares/)
+  SHARES: {
+    BASE: '/shares',
+    DETAIL: (id) => `/shares/${id}`,
+    PUBLISH: (id) => `/shares/${id}/publish`,
+    UPLOADS: (id) => `/shares/${id}/uploads/`, // tus endpoint - see lib/shareUpload.js
+    UPLOAD: (id, fileId) => `/shares/${id}/uploads/${fileId}`,
+    PUBLIC: (token) => `/public/shares/${token}`,
+    PUBLIC_FILE: (token, fileId) => `/public/shares/${token}/files/${fileId}`,
+    UPLOAD_REQUESTS: '/upload-requests', // datasets I was asked to upload
   },
 
   // Elasticsearch endpoints
