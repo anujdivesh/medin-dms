@@ -1,12 +1,16 @@
 import { useState, useEffect } from "react"
 import { Link, useLocation, useNavigate } from "react-router-dom"
-import { getBrandName, getBasePath, getAdminURL } from "@/config/app"
+import { getBrandName, getBasePath } from "@/config/app"
 import { useTheme } from "@/components/theme-provider"
 import DynamicBreadcrumb from "@/components/DynamicBreadcrumb"
 import { ModeToggle } from "@/components/mode-toggle"
 import { useTour } from "@/components/guided-tour"
 import { GuidedTourContent } from "@/components/GuidedTour"
 import QuickSearch from '@/components/QuickSearch'
+import CartButton from '@/components/cart/CartButton'
+import UserMenu from '@/components/auth/UserMenu'
+import { useAuth } from '@/context/AuthContext'
+import { useCart } from '@/context/CartContext'
 import {
   Sidebar,
   SidebarContent,
@@ -22,7 +26,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
-import { Home, HelpCircle, LogIn } from "lucide-react"
+import { Home, HelpCircle, ShoppingCart, ClipboardList, Inbox, FolderUp, Upload } from "lucide-react"
 
 function StartTourSidebarButton() {
   const location = useLocation()
@@ -75,6 +79,9 @@ function Layout({ children }) {
   const location = useLocation()
 
   const isHome = location.pathname.toLowerCase() === '/home'
+  const path = location.pathname.toLowerCase()
+  const { isAuthenticated, roles, user } = useAuth()
+  const { count: cartCount } = useCart()
 
   // Global keyboard shortcut: Ctrl+/ to open quick search
   useEffect(() => {
@@ -134,6 +141,58 @@ function Layout({ children }) {
                         </Link>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton asChild isActive={path === '/cart'} tooltip="Data request cart">
+                        <Link to="/cart">
+                          <ShoppingCart />
+                          <span>Data request cart{cartCount > 0 ? ` (${cartCount})` : ''}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                    {isAuthenticated && (
+                      <SidebarMenuItem>
+                        <SidebarMenuButton asChild isActive={path.startsWith('/my-requests')} tooltip="My requests">
+                          <Link to="/my-requests">
+                            <ClipboardList />
+                            <span>My requests</span>
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    )}
+                    {roles.owner && (
+                      <SidebarMenuItem>
+                        <SidebarMenuButton asChild isActive={path === '/owner'} tooltip="Review requests">
+                          <Link to="/owner">
+                            <Inbox />
+                            <span>
+                              Review requests{user?.owner_pending_count > 0 ? ` (${user.owner_pending_count})` : ''}
+                            </span>
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    )}
+                    {roles.uploader && (
+                      <SidebarMenuItem>
+                        <SidebarMenuButton asChild isActive={path === '/uploads'} tooltip="Data to upload">
+                          <Link to="/uploads">
+                            <Upload />
+                            <span>
+                              Data to upload{user?.upload_pending_count > 0 ? ` (${user.upload_pending_count})` : ''}
+                            </span>
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    )}
+                    {(roles.owner || roles.admin) && (
+                      <SidebarMenuItem>
+                        <SidebarMenuButton asChild isActive={path === '/shares'} tooltip="File shares">
+                          <Link to="/shares">
+                            <FolderUp />
+                            <span>File shares</span>
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    )}
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
@@ -146,14 +205,7 @@ function Layout({ children }) {
                     <ModeToggle />
                     <div className="flex items-center gap-1">
                       <StartTourSidebarButton />
-                      <a
-                        href={getAdminURL()}
-                        className="inline-flex items-center gap-1 text-sm text-white hover:text-white px-2 py-1 rounded-md border border-transparent hover:border-border"
-                        title="Log in to manage records"
-                      >
-                        <LogIn className="h-4 w-4" />
-                        <span>Login</span>
-                      </a>
+                      <UserMenu />
                     </div>
                   </div>
                 </SidebarGroupContent>
@@ -169,6 +221,7 @@ function Layout({ children }) {
                   <SidebarTrigger />
                   <DynamicBreadcrumb />
                 </div>
+                <CartButton />
               </div>
             </div>
 

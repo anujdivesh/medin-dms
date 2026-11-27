@@ -137,6 +137,7 @@ services:
         VITE_BASE_PATH: "/dms/"
         VITE_ES_USERNAME: "${VITE_ES_USERNAME}"
         VITE_ES_PASSWORD: "${VITE_ES_PASSWORD}"
+        VITE_GOOGLE_CLIENT_ID: "${VITE_GOOGLE_CLIENT_ID:-}"
     container_name: dms-frontend
     restart: unless-stopped
     ports:
@@ -191,6 +192,11 @@ services:
       # restart is skipped, so a manual `docker restart dms-pygeoapi` (or
       # your next redeploy) is what actually picks up a new collection.
       - PYGEOAPI_AUTO_RESTART=False
+      - SHARES_ROOT=/app/share_files
+      # Set to the server nginx's internal location for the shares folder
+      # (see shares/views.py public_download) to have nginx send downloads;
+      # empty = Django streams them itself (resumable either way).
+      - SHARE_ACCEL_REDIRECT_PREFIX=${SHARE_ACCEL_REDIRECT_PREFIX:-}
     depends_on:
       database:
         condition: service_healthy
@@ -208,8 +214,36 @@ services:
     volumes:
       - ./backend/media:/app/media
       - ./pygeoapi/pygeoapi-generate-config:/pygeoapi/pygeoapi-generate-config
+      # Temporary file shares (up to 250 GB per file, deleted after 7 days).
+      # Point SHARES_HOST_DIR at a data disk with plenty of free space.
+      - ${SHARES_HOST_DIR:-./backend/share_files}:/app/share_files
     env_file:
       - ./backend/.env
+
+  # 7. Deletes expired file shares (and abandoned uploads) every hour.
+  share-cleaner:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dms-share-cleaner
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", "while true; do python manage.py purge_shares; sleep 3600; done"]
+    environment:
+      - DB_NAME=new_dms
+      - DB_USER=${POSTGRES_USER:-dms_user}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-dms_password}
+      - DB_HOST=database
+      - DB_PORT=5432
+      - SHARES_ROOT=/app/share_files
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ${SHARES_HOST_DIR:-./backend/share_files}:/app/share_files
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - dms-network
 
 
 networks:

@@ -50,3 +50,4 @@ EXPOSE 5000
 # reloads workers automatically instead of needing a manual container
 # restart. Shell form (not exec/JSON form) so ${PYGEOAPI_CONFIG} expands.
 CMD gunicorn main:app --bind 0.0.0.0:5000 --workers 2 --reload --reload-extra-file ${PYGEOAPI_CONFIG}
+                                

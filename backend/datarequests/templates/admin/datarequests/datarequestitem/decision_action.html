@@ -1,0 +1,54 @@
+{% extends "admin/base_site.html" %}
+{% comment %}
+Intermediate page for the Approve / Decline / Reopen actions on request
+items (datarequests.admin.DataRequestItemAdmin._with_form).
+{% endcomment %}
+{% load i18n admin_urls %}
+
+{% block bodyclass %}{{ block.super }} app-{{ opts.app_label }} model-{{ opts.model_name }} delete-selected-confirmation{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+  &rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+  &rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+  &rsaquo; {{ title }}
+</div>
+{% endblock %}
+
+{% block content %}
+<p>{{ intro }}</p>
+<ul>
+  {% for item in items %}
+    <li>
+      <strong>{{ item.request.reference }}</strong> - {{ item.record_title|default:"(untitled record)" }}
+      ({{ item.organisation|default:"no data owner" }}, currently {{ item.get_status_display|lower }})
+    </li>
+  {% endfor %}
+</ul>
+<form method="post">{% csrf_token %}
+  {% if form.fields %}
+    <fieldset class="module aligned">
+      {% for field in form %}
+        <div class="form-row{% if field.errors %} errors{% endif %}">
+          {{ field.errors }}
+          <div>
+            {{ field.label_tag }}
+            {{ field }}
+            {% if field.help_text %}<div class="help">{{ field.help_text }}</div>{% endif %}
+          </div>
+        </div>
+      {% endfor %}
+    </fieldset>
+  {% endif %}
+  {% for item in items %}
+    <input type="hidden" name="_selected_action" value="{{ item.pk }}">
+  {% endfor %}
+  <input type="hidden" name="action" value="{{ action }}">
+  <input type="hidden" name="apply" value="1">
+  <div class="submit-row">
+    <input type="submit" value="{{ submit }}" class="default">
+    <a href="{% url opts|admin_urlname:'changelist' %}" class="button cancel-link">{% translate 'Cancel' %}</a>
+  </div>
+</form>
+{% endblock %}

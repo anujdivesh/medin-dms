@@ -13,9 +13,8 @@ import { elasticsearchService, SORT_OPTIONS } from '@/lib/elasticsearchService'
 
 import MapComponent from '@/components/ui/map-component'
 import { apiService } from '@/lib/apiClient'
-import RequestDataButton from '@/components/RequestDataButton'
+import AddToCartButton from '@/components/cart/AddToCartButton'
 import MetadataMapThumbnail from '@/components/Metadata/MetadataMapThumbnail'
-import RequestMultipleDataButton from '@/components/RequestMultipleDataButton'
 import { Checkbox } from '@/components/ui/checkbox'
 
 // Helper: Title Case for display only (keep original value for filters)
@@ -165,7 +164,6 @@ function HomeSearchMetaData() {
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1)
   const [showSearchForm, setShowSearchForm] = useState(true)
   const [showMap, setShowMap] = useState(true)
-  const [selectedItems, setSelectedItems] = useState([]) // [{id, title}]
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(100)
   const [sortBy, setSortBy] = useState('default') // key of SORT_OPTIONS
@@ -648,7 +646,6 @@ function HomeSearchMetaData() {
     // Restore the search form and map
     setShowSearchForm(true)
     setShowMap(true)
-    setSelectedItems([])
     setBboxFilteredIds(null)
   }
 
@@ -1028,7 +1025,6 @@ function HomeSearchMetaData() {
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-3">
                   {displayResults.map(item => {
-                    const checked = selectedItems.some(si => si.id === item.id)
                     return (
                       <Card
                         key={item.id}
@@ -1084,12 +1080,9 @@ function HomeSearchMetaData() {
                               >
                                 View Details
                               </Button>
-                              <div onClick={(e) => e.stopPropagation()}>
-                                <RequestDataButton
-                                  metadataId={item.id}
-                                  title={`Request Access: ${item.title}`}
-                                />
-                              </div>
+                              <AddToCartButton
+                                record={{ id: item.id, title: item.title, metadataType: item.metadataType }}
+                              />
                             </div>
                           </div>
                         </CardContent>

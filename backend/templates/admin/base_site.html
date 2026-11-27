@@ -1,0 +1,25 @@
+{% extends "admin/base.html" %}
+{% comment %}
+Project-wide admin header (settings.TEMPLATES DIRS). Same as Django's own
+admin/base_site.html, plus a "File shares" link: uploading files and making
+download links happens on the frontend's File shares page (shares app).
+{% endcomment %}
+{% load shares_links %}
+
+{% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}{{ title }} | {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block branding %}
+<div id="site-name"><a href="{% url 'admin:index' %}">{{ site_header|default:_('Django administration') }}</a></div>
+{% if user.is_anonymous %}
+  {% include "admin/color_theme_toggle.html" %}
+{% endif %}
+{% endblock %}
+
+{% block userlinks %}
+  {% if user.is_active and user.is_staff %}
+    <a href="{% frontend_url '/shares' %}">File shares</a> /
+  {% endif %}
+  {{ block.super }}
+{% endblock %}
+
+{% block nav-global %}{% endblock %}

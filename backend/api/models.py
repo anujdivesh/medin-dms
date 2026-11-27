@@ -39,12 +39,12 @@ class TimeStampedModel(models.Model):
 
 
 class LegacyImportedModel(models.Model):
-    """Mixin for models populated by the one-time legacy-DB ETL
-    (api.management.commands.migrate_from_legacy). Storing the legacy row's
-    id lets re-runs upsert by it instead of duplicating rows.
+    """Mixin for models populated by the one-time legacy-DB import. The legacy
+    row's id is kept for reference only: editable=False keeps it off every
+    admin/model form (nobody needs to edit it).
     """
 
-    legacy_id = models.IntegerField(null=True, blank=True, unique=True, db_index=True)
+    legacy_id = models.IntegerField(null=True, blank=True, unique=True, db_index=True, editable=False)
 
     class Meta:
         abstract = True

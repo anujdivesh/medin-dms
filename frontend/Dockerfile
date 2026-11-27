@@ -8,6 +8,8 @@ ARG VITE_API_BASE_URL=""
 ARG VITE_ES_BASE=""
 ARG VITE_ES_USERNAME=""
 ARG VITE_ES_PASSWORD=""
+# Google Identity Services OAuth web client ID (public); empty hides "Sign in with Google"
+ARG VITE_GOOGLE_CLIENT_ID=""
 
 # Copy package files
 COPY package*.json ./
@@ -32,13 +34,15 @@ ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 ENV VITE_ES_BASE=${VITE_ES_BASE}
 ENV VITE_ES_USERNAME=${VITE_ES_USERNAME}
 ENV VITE_ES_PASSWORD=${VITE_ES_PASSWORD}
+ENV VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID}
 
 # Create .env file for build
 RUN echo "VITE_BASE_PATH=${VITE_BASE_PATH}" > .env && \
     echo "VITE_API_BASE_URL=${VITE_API_BASE_URL}" >> .env && \
     echo "VITE_ES_BASE=${VITE_ES_BASE}" >> .env && \
     echo "VITE_ES_USERNAME=${VITE_ES_USERNAME}" >> .env && \
-    echo "VITE_ES_PASSWORD=${VITE_ES_PASSWORD}" >> .env
+    echo "VITE_ES_PASSWORD=${VITE_ES_PASSWORD}" >> .env && \
+    echo "VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID}" >> .env
 
 # Debug: Show the .env file contents
 RUN echo "Contents of .env file:" && cat .env

@@ -64,6 +64,9 @@ INSTALLED_APPS = [
     "corsheaders",
     # Local
     "api",
+    "accounts",
+    "datarequests",
+    "shares",
 ]
 
 MIDDLEWARE = [
@@ -86,7 +89,8 @@ ROOT_URLCONF = "dms.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        # Project-wide template overrides, e.g. templates/admin/base_site.html.
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -208,6 +212,13 @@ REST_FRAMEWORK = {
     "DATETIME_FORMAT": "%Y-%m-%dT%H:%M:%SZ",
     "DATE_FORMAT": "%Y-%m-%dT00:00:00Z",
     "DATE_INPUT_FORMATS": ["iso-8601", "%Y-%m-%dT00:00:00Z"],
+    # Only applied where a view opts in (accounts.views.AuthThrottle on
+    # register/Google/verify endpoints) - no global throttling.
+    "DEFAULT_THROTTLE_RATES": {
+        "auth": os.getenv("AUTH_THROTTLE_RATE", "20/min"),
+        # shares.views.PublicShareView (anyone-with-the-link share pages).
+        "share": os.getenv("SHARE_THROTTLE_RATE", "60/min"),
+    },
 }
 
 # JWT lifetimes matched to the legacy backend's ACCESS_TOKEN_EXPIRE_MINUTES/
@@ -230,6 +241,17 @@ CORS_ALLOWED_ORIGINS = [
     ).split(",")
     if origin
 ]
+# Resumable uploads (shares/tus.py) send and read tus headers cross-origin.
+from corsheaders.defaults import default_headers  # noqa: E402
+
+CORS_ALLOW_HEADERS = (
+    *default_headers,
+    "tus-resumable", "upload-length", "upload-offset", "upload-metadata",
+)
+CORS_EXPOSE_HEADERS = [
+    "Location", "Tus-Resumable", "Tus-Version", "Tus-Max-Size", "Tus-Extension",
+    "Upload-Offset", "Upload-Length",
+]
 
 # Elasticsearch- used by the push_to_elasticsearch management command and
 # api.elasticsearch_sync (real-time sync on save/delete). Which record fields
@@ -243,9 +265,41 @@ ELASTICSEARCH_API_KEY = os.getenv("ELASTICSEARCH_API_KEY", "")
 ELASTICSEARCH_USERNAME = os.getenv("ELASTICSEARCH_USERNAME", "elastic")
 ELASTICSEARCH_PASSWORD = os.getenv("ELASTICSEARCH_PASSWORD", "T2NlYW5wb3J0YWwyMDE3")
 
-# Kept for parity with the legacy backend's own FRONTEND_URL; not otherwise
-# read anywhere in this codebase.
+# Public address of the frontend SPA, including its base path in production
+# (e.g. https://oceandata.spc.int/dms). Used to build links in emails, such as
+# accounts.emails.verification_link.
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+# Google sign-in (accounts.views.google_login): the OAuth 2.0 *Web* client ID
+# from Google Cloud console - the same value as the frontend's
+# VITE_GOOGLE_CLIENT_ID. Empty = Google sign-in disabled (endpoint returns 503).
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+
+# Email (verification links, password resets and, later, data-request
+# notifications to owners). Configured from the SENDGRID_* variables in
+# backend/.env; generic EMAIL_* variables override them if set. With no SMTP
+# host configured, messages are printed to the server console instead (dev).
+EMAIL_HOST = os.getenv("EMAIL_HOST") or os.getenv("SENDGRID_SMTP_HOST", "")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT") or os.getenv("SENDGRID_SMTP_PORT") or "587")
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER") or os.getenv("SENDGRID_SMTP_USERNAME", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD") or os.getenv("SENDGRID_SMTP_PASSWORD", "")
+# 465 = implicit TLS (SSL); anything else (587, 2525, 25) = STARTTLS.
+EMAIL_USE_SSL = EMAIL_PORT == 465
+EMAIL_USE_TLS = not EMAIL_USE_SSL and os.getenv("EMAIL_USE_TLS", "True") == "True"
+EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "15"))
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND") or (
+    "django.core.mail.backends.smtp.EmailBackend" if EMAIL_HOST
+    else "django.core.mail.backends.console.EmailBackend"
+)
+_from_email = os.getenv("SENDGRID_FROM_EMAIL", "no-reply@spc.int")
+_from_name = os.getenv("SENDGRID_FROM_NAME", "SPC Data Catalogue")
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL") or f"{_from_name} <{_from_email}>"
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+# Where replies to automated emails go (accounts.emails adds a Reply-To header).
+EMAIL_REPLY_TO = os.getenv("EMAIL_REPLY_TO") or os.getenv("SENDGRID_REPLY_TO", "")
+# SPC mailbox alerted when requested datasets have no data owner (or the owner
+# organisation has no email/contacts) and need routing in the admin.
+DATA_REQUEST_ADMIN_EMAIL = os.getenv("DATA_REQUEST_ADMIN_EMAIL") or EMAIL_REPLY_TO
 
 # Used to build an absolute acquisition-report download link (see
 # MetadataRecord.acquisition_report_url in api/models.py) - the stored
@@ -272,3 +326,21 @@ PYGEOAPI_RESTART_COMMAND = os.getenv("PYGEOAPI_RESTART_COMMAND", "")
 # Public pygeoapi address for the admin's "View in pygeoapi" links. Empty =
 # server.url from pygeoapi-config.yml (api.pygeoapi_sync.public_url).
 PYGEOAPI_PUBLIC_URL = os.getenv("PYGEOAPI_PUBLIC_URL", "")
+
+# Temporary file shares (shares app): large files - hundreds of GB - uploaded
+# in resumable chunks (tus protocol, shares/tus.py) and handed out with an
+# anyone-with-the-link URL that stops working, and whose files are deleted,
+# SHARE_LIFETIME_DAYS after publishing (shares/management/commands/
+# purge_shares.py, run hourly by the share-cleaner service in
+# docker-compose.yml).
+SHARES_ROOT = Path(os.getenv("SHARES_ROOT", BASE_DIR / "share_files"))
+SHARE_LIFETIME_DAYS = int(os.getenv("SHARE_LIFETIME_DAYS", "7"))
+SHARE_MAX_FILE_SIZE = int(os.getenv("SHARE_MAX_FILE_SIZE_GB", "250")) * 1024**3
+# Uploads are refused when they'd leave less than this free on SHARES_ROOT's disk.
+SHARE_DISK_RESERVE = int(os.getenv("SHARE_DISK_RESERVE_GB", "20")) * 1024**3
+# Unpublished shares (abandoned uploads) are deleted after this many hours.
+SHARE_DRAFT_TTL_HOURS = int(os.getenv("SHARE_DRAFT_TTL_HOURS", "48"))
+# Downloads: empty = Django streams the file itself (with Range support). Set
+# to an nginx `internal` location that aliases SHARES_ROOT (e.g.
+# "/protected-shares/") to have nginx serve the bytes via X-Accel-Redirect.
+SHARE_ACCEL_REDIRECT_PREFIX = os.getenv("SHARE_ACCEL_REDIRECT_PREFIX", "")
